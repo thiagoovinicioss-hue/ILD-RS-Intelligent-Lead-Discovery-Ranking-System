@@ -393,7 +393,7 @@ def leads_list(
 
     items = asyncio.run(main())
     _print_rows(
-        ["RANK", "STATUS", "RATING", "CONF", "MODEL", "ID"],
+        ["RANK", "STATUS", "RATING", "CONF", "MODEL", "EV", "ID"],
         [
             [
                 it.get("rank"),
@@ -401,11 +401,21 @@ def leads_list(
                 it.get("rating"),
                 it.get("confidence"),
                 f"{it.get('model')}@{it.get('model_version')}",
+                _ev_preview(it.get("expected_value")),
                 it.get("id"),
             ]
             for it in items
         ],
     )
+
+
+def _ev_preview(ev: dict | None) -> str:
+    """Short EV display: value, or the probability state when not ready."""
+    if not ev:
+        return "n/a"
+    if ev.get("ready"):
+        return f"{ev['expected_value']:.2f}"
+    return ev.get("prob_state", "unknown")
 
 
 @leads_cmd.command("show")

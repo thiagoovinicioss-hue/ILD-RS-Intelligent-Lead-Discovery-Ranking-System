@@ -13,7 +13,9 @@ BUSINESS DISCOVERY → DATA COLLECTION → DATA ANALYSIS → RATING ENGINE
 
 - **Backend**: Python 3.12+ · FastAPI · SQLAlchemy 2 (async) · SQLite (Postgres-ready)
 - **CLI**: Typer, single `ildrs` entrypoint, graceful Ctrl+C
-- **Frontend**: dependency-free HTML/CSS/JS dashboard served by FastAPI
+- **Frontend**: dependency-free HTML/CSS/JS dashboard served by FastAPI —
+  sortable leaderboard with EV column, click any row for a drill-down detail view
+  (feature breakdown, confidence, explanations, provenance, outreach)
 - **No fabrication**: every business field carries provenance
   (`direct` / `derived` / `inferred` / `unavailable`)
 
@@ -131,6 +133,15 @@ All endpoints live under `/api/v1` and return JSON. Interactive docs at
 | PATCH  | `/api/v1/leads/{id}/status`   | Manual review status                       |
 | POST   | `/api/v1/leads/{id}/outreach` | Create outreach attempt                    |
 | PATCH  | `/api/v1/outreach/{id}`       | Transition outreach outcome                |
+| GET    | `/api/v1/outreach/pending`    | Review queue: drafts awaiting human review |
+| POST   | `/api/v1/leads/{id}/outreach/prepare` | Generate + enqueue a verified draft  |
+| GET    | `/api/v1/outreach/{id}`       | Outreach detail (message, review status)   |
+| POST   | `/api/v1/outreach/{id}/approve` | Human approval → message becomes sendable |
+| POST   | `/api/v1/outreach/{id}/edit`  | Human edits message/reason                 |
+| POST   | `/api/v1/outreach/{id}/reject`| Reject draft (never sent)                  |
+| POST   | `/api/v1/outreach/{id}/send`  | Record that a channel delivered the message|
+| GET    | `/api/v1/outreach/monitoring` | Response-monitor status (last/next check)  |
+| POST   | `/api/v1/outreach/monitoring/run` | Run one monitoring pass (manual)      |
 | GET    | `/api/v1/jobs`                | Job history                                |
 | POST   | `/api/v1/jobs/run`            | Run a pipeline stage `{stage, mode}`       |
 | GET    | `/api/v1/notifications`       | Notifications                              |
@@ -176,8 +187,11 @@ R = 100 · Σ wᵢ · zᵢ        zᵢ = transform_i(normalize_i(xᵢ))
   `Total rating: 61.6 / 100`. No rating is ever an unexplained number.
 - **Confidence ≠ rating** — confidence is the weighted share of features with
   real data. A lead can have a high rating and low confidence.
-- **Expected value (reserved)** — `EV = P(conversion)·value − cost`; V1 only
-  emits `estimated` (configured prior) or `unknown`, never a fake `observed`.
+- **Expected value** — `EV = P(conversion)·value − cost`; V1/V2 emit
+  `estimated` (configured prior) or `unknown`, never a fake `observed`. The
+  snapshot lands on each lead (`Lead.expected_value`) and is shown by the API,
+  CLI, and dashboard (as a column and in the lead detail view) when
+  `ILD_EV_DEAL_VALUE`/`ILD_EV_COST` are set.
 - **Centralized config** — weights/decay/transforms/EV live in
   `ildrs/rating/config.py` and are documented hypotheses, not scattered
   constants.
@@ -185,6 +199,40 @@ R = 100 · Σ wᵢ · zᵢ        zᵢ = transform_i(normalize_i(xᵢ))
   (tested).
 
 All of it lives in `ildrs/rating/` — a standalone layer with no UI dependency.
+
+---
+
+## Outreach review
+
+No message is ever sent automatically. The pipeline generates a **verified-facts
+draft** for each rated lead, which lands in the **review queue** and requires a
+human decision:
+
+- **Prepare** (`POST /leads/{id}/outreach/prepare`) — generates a draft whose
+  message only states facts with `direct`/`derived` provenance. Unavailable or
+  inferred fields are never stated, a zero review count is never reported, and
+  every generated idea is explicitly labeled **"Suggestion:"**. The
+  recommendation comes with a transparent **reason** (rating, confidence, top
+  contributing signals).
+- **Approve** — human approval marks the message sendable (`queued`).
+- **Edit** — a human rewrites the message/reason before sending.
+- **Reject** — the draft is closed and can never be sent or approved.
+- **Send** (`POST /outreach/{id}/send`) — records that a channel delivered the
+  approved message. It is a ledger action, not a mailer.
+
+A background job (`ILD_OUTREACH_AUTO_PREPARE`) prepares drafts for rated leads
+that have no outreach record yet; it never sends anything. High-value leads
+(≥ `ILD_OUTREACH_HIGH_VALUE_RATING`) raise an info notification so a reviewer
+notices them.
+
+### Response monitoring
+
+A scheduled job (`ILD_OUTREACH_MONITOR_SOURCE`) checks authorized channels for
+responses to sent outreach. Until an inbox integration is configured, the
+monitor honestly reports **unavailable** (it never pretends a check ran). The
+dashboard shows each source's status, last check, next check, and detail; sent
+outreach rows are stamped with check times so the state is always observable.
+Only *sent* messages are polled; nothing here performs automated broadcast.
 
 ---
 
@@ -206,6 +254,11 @@ See [`.env.example`](.env.example) for the full, documented list. Key variables:
 | `ILD_WEIGHT_<FEATURE>`      | see `.env.example`               | Per-feature weights (normalized to 1) |
 | `ILD_VERIFY_INTERVAL_HOURS` | `24`                             | Periodic verification cadence         |
 | `ILD_REFRESH_INTERVAL_HOURS`| `6`                              | Periodic re-rating/ranking cadence    |
+| `ILD_OUTREACH_MESSAGE_STYLE`| `professional`                   | Draft tone (`professional`/`warm`/`concise`) |
+| `ILD_OUTREACH_HIGH_VALUE_RATING` | `70`                        | Rating threshold that raises a review notification |
+| `ILD_OUTREACH_AUTO_PREPARE` | `true`                           | Auto-generate drafts for rated leads  |
+| `ILD_OUTREACH_MONITOR_SOURCE`| `none`                          | Response source; `none` = monitoring unavailable (honest) |
+| `ILD_OUTREACH_MONITOR_INTERVAL_MINUTES` | `60`                 | Cadence of the response-monitor job   |
 | `ILD_NOTIFY_WEBHOOK_URL`    | *(empty)*                        | Optional webhook for notifications    |
 | `ILD_API_HOST` / `ILD_API_PORT` | `127.0.0.1` / `8080`         | Uvicorn bind address                  |
 

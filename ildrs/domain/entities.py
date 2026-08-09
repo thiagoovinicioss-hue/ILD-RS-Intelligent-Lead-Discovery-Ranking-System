@@ -33,6 +33,25 @@ OUTREACH_CHANNELS = ("email", "phone", "linkedin", "other")
 
 OUTCOME_POSITIVE = {"responded", "interested", "converted"}
 
+# Review-queue lifecycle for a proposed outreach message.
+REVIEW_STATUSES = ("pending", "approved", "rejected", "edited")
+
+# Delivery lifecycle, kept separate from review so a rejected draft is never sent.
+OUTREACH_SENT_STATUSES = ("draft", "queued", "sent", "failed")
+
+# Response monitoring lifecycle for a sent outreach item.
+RESPONSE_STATUSES = (
+    "awaiting",
+    "no_response",
+    "responded",
+    "interested",
+    "declined",
+    "converted",
+)
+
+# Monitor channel status reported by the response-monitoring scheduler.
+MONITOR_STATUSES = ("operational", "checking", "unavailable", "error")
+
 
 @dataclass
 class Candidate:
@@ -164,6 +183,43 @@ class OutreachRecord:
     status: str
     note: str = ""
     occurred_at: datetime = field(default_factory=utcnow)
+    message: str = ""
+    reason: str = ""
+    created_at: datetime = field(default_factory=utcnow)
+    review_status: str = "pending"
+    sent_status: str = "draft"
+    response_status: str = "awaiting"
+    outcome: str = ""
+    sent_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    next_check_at: datetime | None = None
+
+
+@dataclass
+class MessageDraft:
+    """A proposed outreach message generated from verified business data.
+
+    ``facts`` lists only the observed facts referenced by the message (each
+    tagged with its provenance). ``suggestions`` are clearly-labeled generated
+    content — the reader can always tell what is real from what is suggested.
+    """
+
+    message: str
+    reason: str
+    facts: list[dict[str, object]] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ResponseMonitorStatus:
+    """Health of one response-monitoring channel."""
+
+    source: str
+    configured: bool
+    status: str = "unavailable"
+    detail: str = ""
+    last_checked_at: datetime | None = None
+    next_check_at: datetime | None = None
 
 
 @dataclass

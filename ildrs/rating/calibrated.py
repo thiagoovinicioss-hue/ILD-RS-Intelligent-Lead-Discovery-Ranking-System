@@ -25,6 +25,7 @@ from ildrs.rating.base import (
     OutcomeSample,
     scale_to_100,
 )
+from ildrs.rating.ev import ExpectedValue
 from ildrs.rating.weighted import WeightedScoringModel, normalize_weights
 
 _MIN_N = 2  # absolute floor for a usable mean; real floor comes from config
@@ -128,6 +129,10 @@ class CalibratedWeightsModel:
                 "contribution": round(contribution, 4),
                 "provenance": value.provenance_kind,
             }
+        ev_cfg = get_settings()
+        expected_value = ExpectedValue.from_prior(
+            ev_cfg.ev_prior_probability, ev_cfg.ev_deal_value, ev_cfg.ev_cost
+        )
         return RatingResult(
             rating=scale_to_100(total),
             confidence=0.0,
@@ -138,6 +143,7 @@ class CalibratedWeightsModel:
                 "method": "statistically calibrated weights",
                 "calibrated_on": self._samples,
                 "correlations": {k: round(v, 4) for k, v in self._correlations.items()},
+                "expected_value": expected_value.to_dict(),
             },
         )
 

@@ -53,7 +53,7 @@
       <section class="panel">
         <div class="phead">
           <h2>Ranked leads</h2>
-          <span class="hint">top 50 · by rank</span>
+          <span class="hint">top 50 · by rank · click a row for details</span>
         </div>
         <div class="tablewrap">
           <table id="leads-table">
@@ -66,13 +66,26 @@
                 <th>conf</th>
                 <th>status</th>
                 <th>model</th>
+                <th>EV</th>
                 <th>updated</th>
               </tr>
             </thead>
             <tbody id="leads-body">
-              <tr><td colspan="8" class="loading">loading leads …</td></tr>
+              <tr><td colspan="9" class="loading">loading leads …</td></tr>
             </tbody>
           </table>
+        </div>
+        <div id="lead-detail" class="pbody lead-detail" hidden></div>
+      </section>
+
+      <!-- review queue -->
+      <section class="panel">
+        <div class="phead">
+          <h2>Outreach review queue</h2>
+          <span class="hint">human approval is required before any message is sent</span>
+        </div>
+        <div class="pbody" id="review-queue">
+          <div class="loading">loading review queue …</div>
         </div>
       </section>
     </section>
@@ -110,6 +123,17 @@
       <section class="panel">
         <div class="phead"><h2>Active jobs</h2><span class="hint">scheduler</span></div>
         <div class="pbody" id="jobs-box">
+          <div class="loading">–</div>
+        </div>
+      </section>
+
+      <!-- response monitoring -->
+      <section class="panel">
+        <div class="phead">
+          <h2>Response monitoring</h2>
+          <button class="badge mute" id="monitor-run" type="button">run now</button>
+        </div>
+        <div class="pbody" id="monitor-box">
           <div class="loading">–</div>
         </div>
       </section>

@@ -30,6 +30,8 @@ from ildrs.jobs.definitions import register_periodic_jobs
 from ildrs.jobs.scheduler import Scheduler, next_run_time
 from ildrs.notifications.notifier import Notifier
 from ildrs.observability.logging import configure_logging
+from ildrs.outreach.monitoring import ResponseMonitor
+from ildrs.outreach.review import ReviewWorkflow
 from ildrs.outreach.workflow import OutreachWorkflow
 from ildrs.pipeline.orchestrator import Orchestrator
 from ildrs.sources.registry import create_source
@@ -55,9 +57,11 @@ def create_app() -> FastAPI:
         notifier = Notifier(db)
         orchestrator = Orchestrator(db, source, notifier)
         outreach = OutreachWorkflow(db)
+        review = ReviewWorkflow(db, notifier)
+        monitor = ResponseMonitor(db, notifier)
         scheduler = Scheduler()
 
-        register_periodic_jobs(scheduler, orchestrator)
+        register_periodic_jobs(scheduler, orchestrator, review=review, monitor=monitor)
         await scheduler.start()
 
         context = AppContext(
@@ -66,6 +70,8 @@ def create_app() -> FastAPI:
             notifier=notifier,
             orchestrator=orchestrator,
             outreach=outreach,
+            review=review,
+            monitor=monitor,
             scheduler=scheduler,
         )
         app.state.context = context

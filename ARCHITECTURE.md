@@ -114,9 +114,11 @@ R = 100 · Σᵢ wᵢ · zᵢ          zᵢ = transform_i(normalize_i(xᵢ))
 - **Confidence** (`ildrs/rating/confidence.py`) is separate from the rating:
   the weighted share of features with real data. High rating + low confidence
   is valid when only few high-weight features were observed.
-- **Expected value** (`ildrs/rating/ev.py`): `EV = P(conversion)·value − cost`
-  is reserved for later; V1 only emits `estimated` (configured prior) or
-  `unknown`, never a fabricated `observed` probability.
+- **Expected value** (`ildrs/rating/ev.py`): `EV = P(conversion)·value − cost`.
+  V1 and V2 emit `estimated` (configured prior) or `unknown`, never a
+  fabricated `observed` probability. The EV snapshot is persisted on each
+  `Lead.expected_value` and surfaced by the API, CLI, and dashboard when the
+  operator sets `ILD_EV_DEAL_VALUE` + `ILD_EV_COST`.
 - **Config** is centralized (`ildrs/rating/config.py`): weights, decay,
   transforms, and EV assumptions are documented hypotheses — not scattered
   constants.
@@ -186,11 +188,14 @@ ILD&RS/
 │   ├── jobs/
 │   │   ├── __init__.py
 │   │   ├── scheduler.py       # async task scheduler with graceful cancel
-│   │   └── definitions.py     # periodic jobs (verify, rerank)
+│   │   └── definitions.py     # periodic jobs (verify, rerank, outreach-prepare, outreach-monitor)
 │   ├── outreach/
 │   │   ├── __init__.py
 │   │   ├── workflow.py        # status transitions + outcome recording
-│   │   └── channels.py        # channel enum + delivery stubs
+│   │   ├── channels.py        # channel enum + delivery stubs
+│   │   ├── messages.py        # verified-facts-only message generation
+│   │   ├── review.py          # review queue: prepare/approve/edit/reject/send
+│   │   └── monitoring.py      # response monitor (honest unavailable state)
 │   ├── notifications/
 │   │   ├── __init__.py
 │   │   └── notifier.py        # DB notifications + optional webhook/console
@@ -324,6 +329,7 @@ Lead
   confidence    float   # data-availability confidence in [0, 1]
   model         str     # "v1" | "v2" | ...
   model_version str
+  expected_value json  # EV snapshot: {prob_state, probability, deal_value, cost, expected_value, ready, note}
   rank          int     # 1-based dense rank
   percentile    float
   features      json
@@ -409,6 +415,11 @@ hardcoded and never exposed via the API.
 | `ILD_WEIGHT_LOCATION_FIT`    | `0.10`                           | …                                         |
 | `ILD_VERIFY_INTERVAL_HOURS`  | `24`                             | Periodic verification cadence             |
 | `ILD_REFRESH_INTERVAL_HOURS` | `6`                              | Periodic re-rating/ranking cadence        |
+| `ILD_OUTREACH_MESSAGE_STYLE` | `professional`                   | Draft tone (`professional`/`warm`/`concise`) |
+| `ILD_OUTREACH_HIGH_VALUE_RATING` | `70`                          | Rating threshold for "high-value queued" notification |
+| `ILD_OUTREACH_AUTO_PREPARE`  | `true`                           | Auto-generate review drafts for rated leads |
+| `ILD_OUTREACH_MONITOR_SOURCE`| `none`                           | Response source; `none` ⇒ monitoring honestly unavailable |
+| `ILD_OUTREACH_MONITOR_INTERVAL_MINUTES` | `60`                  | Response-monitor scheduled cadence       |
 | `ILD_NOTIFY_WEBHOOK_URL`     | *(empty)*                        | Optional webhook for notifications        |
 | `ILD_API_HOST`               | `127.0.0.1`                      | Uvicorn bind host                         |
 | `ILD_API_PORT`               | `8080`                           | Uvicorn bind port                         |
@@ -434,6 +445,13 @@ Weights are normalized internally so `Σ wᵢ = 1`.
 | PATCH   | `/api/v1/leads/{id}/status`   | Manual review status                       |
 | POST   | `/api/v1/leads/{id}/outreach` | Create outreach attempt                    |
 | PATCH   | `/api/v1/outreach/{id}`       | Transition outreach outcome                |
+| GET    | `/api/v1/outreach/pending`    | Review queue (drafts awaiting human review)|
+| POST   | `/api/v1/leads/{id}/outreach/prepare` | Generate + enqueue a verified draft |
+| GET    | `/api/v1/outreach/{id}`       | Outreach detail                            |
+| POST   | `/api/v1/outreach/{id}/approve` / `/edit` / `/reject` | Human review decisions |
+| POST   | `/api/v1/outreach/{id}/send`  | Record channel delivery (ledger, not mailer)|
+| GET    | `/api/v1/outreach/monitoring` | Response-monitor status                    |
+| POST   | `/api/v1/outreach/monitoring/run` | Run one monitoring pass (manual)      |
 | GET    | `/api/v1/jobs`                | Job history                                |
 | POST   | `/api/v1/jobs/run`            | Run a pipeline stage `{stage, mode}`       |
 | GET    | `/api/v1/notifications`       | Notifications                              |
@@ -441,6 +459,31 @@ Weights are normalized internally so `Σ wᵢ = 1`.
 | GET    | `/` …                         | Dashboard (static frontend)                |
 
 Errors use a consistent envelope: `{"detail": {"code", "message", "context"?}}`.
+
+### Review queue & response monitoring
+
+The outreach lifecycle is: **prepare → review → send → monitor**:
+
+1. **Prepare** — the message generator builds a draft stating only
+   `direct`/`derived`-provenance facts (never a zero review count, never an
+   unavailable rating, never a fabricated problem), labels generated ideas
+   explicitly ("Suggestion:"), and attaches a transparent recommendation reason.
+   The draft is enqueued with `review_status=pending` and `sent_status=draft`.
+2. **Human review** — `approve` makes the message sendable (`queued`);
+   `edit` rewrites it; `reject` closes it forever (rejected drafts cannot be
+   approved or sent). Idempotent per lead: a lead never gets a second draft.
+3. **Send** — `mark_sent` records channel delivery; only approved/edited rows
+   can be marked sent, and only once.
+4. **Monitor** — the scheduled `ResponseMonitor` polls only *sent* outreach
+   through the configured source. When no source is authorized
+   (`ILD_OUTREACH_MONITOR_SOURCE=none`), it records and reports
+   `status=unavailable` honestly (it never pretends a check ran), stamps sent
+   rows with `last_checked_at`/`next_check_at`, and warns once (not on every
+   interval). A manual `POST …/monitoring/run` triggers a pass on demand.
+
+`/api/v1/system/status` exposes `review_queue {pending, approved, rejected}` and
+`monitoring {configured, source, interval_minutes, sources}` blocks consumed by
+the dashboard's review and monitoring panels.
 
 ---
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from ildrs.jobs.scheduler import Scheduler
 from ildrs.notifications.notifier import Notifier
+from ildrs.outreach.monitoring import ResponseMonitor
+from ildrs.outreach.review import ReviewWorkflow
 from ildrs.outreach.workflow import OutreachWorkflow
 from ildrs.pipeline.orchestrator import Orchestrator
 from ildrs.sources.base import BusinessSource
@@ -20,5 +22,7 @@ class AppContext:
     notifier: Notifier
     orchestrator: Orchestrator
     outreach: OutreachWorkflow
+    review: ReviewWorkflow
+    monitor: ResponseMonitor
     scheduler: Scheduler = field(default_factory=Scheduler)
     background_tasks: set[asyncio.Task] = field(default_factory=set)

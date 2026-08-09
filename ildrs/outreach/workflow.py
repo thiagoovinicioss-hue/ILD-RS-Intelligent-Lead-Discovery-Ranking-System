@@ -58,7 +58,13 @@ class OutreachWorkflow:
             )
         async with self.db.session() as session:
             row = await create_outreach(
-                session, lead_id=lead_id, channel=channel, status="queued", note=note
+                session,
+                lead_id=lead_id,
+                channel=channel,
+                status="queued",
+                note=note,
+                review_status="approved",
+                sent_status="queued",
             )
             if row is None:
                 return TransitionResult(False, f"lead '{lead_id}' not found")
@@ -99,7 +105,7 @@ class OutreachWorkflow:
             lead_id=lead.id,
             outcome=outcome,
             outcome_value=1 if positive else 0,
-            features=lead.features,
+            features=_feature_snapshot(lead.features),
         )
 
     async def history(self, *, lead_id: str) -> list[dict]:
@@ -121,10 +127,30 @@ class OutreachWorkflow:
 
 def outcome_to_sample(row) -> dict:
     features = {}
-    if isinstance(row.features, dict):
-        for key, value in row.features.items():
+    stored = row.features
+    if isinstance(stored, dict):
+        for key, value in stored.items():
             if isinstance(value, dict):
                 features[key] = value.get("value")
             else:
                 features[key] = value
     return {"features": features, "outcome_value": row.outcome_value}
+
+
+def _feature_snapshot(lead_features) -> dict:
+    """Per-feature normalized values for the historical outcome snapshot.
+
+    ``lead.features`` stores the full RatingResult (with a nested
+    ``breakdown``); the calibration path only needs the per-feature
+    ``value``/``normalized`` entries, keyed by feature name.
+    """
+    if not isinstance(lead_features, dict):
+        return {}
+    breakdown = lead_features.get("breakdown")
+    if isinstance(breakdown, dict):
+        return {
+            key: data.get("normalized", data.get("value"))
+            for key, data in breakdown.items()
+            if isinstance(data, dict)
+        }
+    return lead_features

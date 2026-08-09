@@ -74,7 +74,7 @@ class Orchestrator:
                 await finish_job(session, job_id=job_id, status="failed", error=str(exc))
                 await session.commit()
             logger.error("stage '%s' failed: %s", stage, exc)
-            await self.notifier.send("error", f"Stage {stage} failed", str(exc))
+            await self._notify_failure(stage, exc)
             raise
 
     async def run_stage_guarded(
@@ -86,6 +86,16 @@ class Orchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.exception("guarded stage '%s' failed", stage)
             return {"stage": stage, "status": "failed", "error": str(exc)}
+
+    async def _notify_failure(self, stage: str, exc: Exception) -> None:
+        """Categorize a stage failure into a stable notification type."""
+        from ildrs.sources.base import QuotaError, RateLimitedError
+
+        detail = str(exc)
+        if isinstance(exc, (QuotaError, RateLimitedError)):
+            await self.notifier.provider_quota(source=self.source.name, detail=detail)
+            return
+        await self.notifier.background_job_failed(stage=stage, detail=detail)
 
     async def run_full_pipeline(self, *, cancel: asyncio.Event | None = None) -> list[dict]:
         """discover → collect → analyze → rate → rank."""

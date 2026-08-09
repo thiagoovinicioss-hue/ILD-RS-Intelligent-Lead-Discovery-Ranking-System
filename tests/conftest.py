@@ -36,6 +36,7 @@ def make_business(
     status: str = "OPERATIONAL",
     lat: float | None = None,
     lng: float | None = None,
+    external_id: str = "fix-test",
 ) -> Business:
     provenance = ProvenanceMap()
     provenance.set("name", DataSourceKind.DIRECT, "fixture", name)
@@ -78,7 +79,7 @@ def make_business(
 
     return Business(
         source="fixture",
-        external_id="fix-test",
+        external_id=external_id,
         name=name,
         category=category,
         google_rating=rating,

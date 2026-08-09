@@ -81,6 +81,7 @@ class LeadRow(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     model: Mapped[str] = mapped_column(String(16), default="v1")
     model_version: Mapped[str] = mapped_column(String(64), default="")
+    expected_value: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     percentile: Mapped[float | None] = mapped_column(Float, nullable=True)
     features: Mapped[dict] = mapped_column(JSONType, default=dict)
@@ -107,10 +108,42 @@ class OutreachRow(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued")
     note: Mapped[str] = mapped_column(Text, default="")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str] = mapped_column(Text, default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    review_status: Mapped[str] = mapped_column(String(16), default="pending")
+    sent_status: Mapped[str] = mapped_column(String(16), default="draft")
+    response_status: Mapped[str] = mapped_column(String(16), default="awaiting")
+    outcome: Mapped[str] = mapped_column(String(16), default="")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     lead: Mapped[LeadRow] = relationship(back_populates="outreach")
 
-    __table_args__ = (Index("ix_outreach_lead", "lead_id"),)
+    __table_args__ = (
+        Index("ix_outreach_lead", "lead_id"),
+        Index("ix_outreach_review", "review_status"),
+        Index("ix_outreach_sent", "sent_status"),
+    )
+
+
+class OutreachMonitorRow(Base):
+    """Health row for one response-monitoring channel.
+
+    Persisted so the dashboard always shows LAST CHECKED / NEXT CHECK / STATUS
+    even across restarts, and so "not configured" is visible without any job
+    having run.
+    """
+
+    __tablename__ = "outreach_monitors"
+
+    source: Mapped[str] = mapped_column(String(64), primary_key=True)
+    configured: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="unavailable")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class HistoricalOutcomeRow(Base):

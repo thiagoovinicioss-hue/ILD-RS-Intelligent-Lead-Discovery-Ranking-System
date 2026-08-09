@@ -25,6 +25,7 @@ from ildrs.storage.models import (
     JobRow,
     LeadRow,
     NotificationRow,
+    OutreachMonitorRow,
     OutreachRow,
 )
 
@@ -342,6 +343,24 @@ async def count_high_quality_leads(session: AsyncSession, threshold: float = 70.
     return len(result.scalars().all())
 
 
+async def high_value_leads(
+    session: AsyncSession, threshold: float = 70.0, *, limit: int = 20
+) -> list[tuple[str, str, float]]:
+    """Leads at or above the high-value rating threshold, with business name.
+
+    Returns ``(lead_id, business_name, rating)`` tuples ordered by rating.
+    Used to raise a "high-value lead detected" notification when the set grows.
+    """
+    stmt = (
+        select(LeadRow.id, BusinessRow.name, LeadRow.rating)
+        .join(BusinessRow, LeadRow.business_id == BusinessRow.id)
+        .where(LeadRow.rating >= threshold)
+        .order_by(LeadRow.rating.desc())
+    )
+    result = await session.execute(stmt.limit(limit))
+    return [(row.id, row.name, row.rating) for row in result.all()]
+
+
 async def last_verification_time(session: AsyncSession) -> str | None:
     result = await session.execute(
         select(BusinessRow.last_verified_at)
@@ -378,6 +397,7 @@ def lead_serialize(row: LeadRow) -> dict[str, Any]:
         "confidence": row.confidence,
         "model": row.model,
         "model_version": row.model_version,
+        "expected_value": row.expected_value,
         "rank": row.rank,
         "percentile": row.percentile,
         "features": row.features,
@@ -396,6 +416,7 @@ async def upsert_lead(
     model: str,
     model_version: str,
     features: dict[str, Any],
+    expected_value: dict | None = None,
 ) -> LeadRow:
     result = await session.execute(select(LeadRow).where(LeadRow.business_id == business_id))
     row = result.scalar_one_or_none()
@@ -408,6 +429,7 @@ async def upsert_lead(
             confidence=confidence,
             model=model,
             model_version=model_version,
+            expected_value=expected_value,
             features=features,
             status="new",
             created_at=now,
@@ -420,6 +442,7 @@ async def upsert_lead(
         row.confidence = confidence
         row.model = model
         row.model_version = model_version
+        row.expected_value = expected_value
         row.features = features
         row.updated_at = now
         await session.flush()
@@ -467,6 +490,20 @@ async def lead_by_business(session: AsyncSession, business_id: str) -> LeadRow |
     return result.scalar_one_or_none()
 
 
+async def leads_without_outreach(session: AsyncSession, *, limit: int = 100) -> list[LeadRow]:
+    """Rated leads that have no outreach record yet (for auto-prepare)."""
+    stmt = (
+        select(LeadRow)
+        .options(selectinload(LeadRow.business))
+        .outerjoin(OutreachRow, OutreachRow.lead_id == LeadRow.id)
+        .where(OutreachRow.id.is_(None))
+        .where(LeadRow.rating > 0)
+        .order_by(LeadRow.rating.desc())
+    )
+    result = await session.execute(stmt.limit(limit))
+    return list(result.scalars().all())
+
+
 async def set_lead_status(session: AsyncSession, lead_id: str, status: str) -> LeadRow | None:
     row = await session.get(LeadRow, lead_id)
     if row is None:
@@ -508,6 +545,16 @@ def outreach_serialize(row: OutreachRow) -> dict[str, Any]:
         "status": row.status,
         "note": row.note,
         "occurred_at": row.occurred_at.isoformat() if row.occurred_at else None,
+        "message": row.message,
+        "reason": row.reason,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "review_status": row.review_status,
+        "sent_status": row.sent_status,
+        "response_status": row.response_status,
+        "outcome": row.outcome,
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+        "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else None,
+        "next_check_at": row.next_check_at.isoformat() if row.next_check_at else None,
     }
 
 
@@ -518,17 +565,27 @@ async def create_outreach(
     channel: str,
     status: str = "queued",
     note: str = "",
+    message: str = "",
+    reason: str = "",
+    review_status: str = "pending",
+    sent_status: str = "draft",
 ) -> OutreachRow | None:
     lead = await session.get(LeadRow, lead_id)
     if lead is None:
         return None
+    now = utcnow()
     row = OutreachRow(
         id=_new_id(),
         lead_id=lead_id,
         channel=channel,
         status=status,
         note=note,
-        occurred_at=utcnow(),
+        occurred_at=now,
+        message=message,
+        reason=reason,
+        created_at=now,
+        review_status=review_status,
+        sent_status=sent_status,
     )
     session.add(row)
     await session.flush()
@@ -557,6 +614,155 @@ async def outreach_for_lead(session: AsyncSession, lead_id: str) -> list[Outreac
         .where(OutreachRow.lead_id == lead_id)
         .order_by(OutreachRow.occurred_at.desc())
     )
+    return list(result.scalars().all())
+
+
+async def list_outreach(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    review_status: str | None = None,
+    sent_status: str | None = None,
+) -> list[OutreachRow]:
+    stmt = (
+        select(OutreachRow)
+        .options(selectinload(OutreachRow.lead).selectinload(LeadRow.business))
+        .order_by(OutreachRow.created_at.desc())
+    )
+    if review_status:
+        stmt = stmt.where(OutreachRow.review_status == review_status)
+    if sent_status:
+        stmt = stmt.where(OutreachRow.sent_status == sent_status)
+    result = await session.execute(stmt.offset(offset).limit(limit))
+    return list(result.scalars().all())
+
+
+async def pending_review_items(session: AsyncSession, *, limit: int = 100) -> list[OutreachRow]:
+    """Outreach drafts awaiting human review (the review queue)."""
+    stmt = (
+        select(OutreachRow)
+        .options(selectinload(OutreachRow.lead).selectinload(LeadRow.business))
+        .where(OutreachRow.review_status == "pending")
+        .order_by(OutreachRow.created_at.asc())
+    )
+    result = await session.execute(stmt.limit(limit))
+    return list(result.scalars().all())
+
+
+async def set_outreach_review_status(
+    session: AsyncSession, outreach_id: str, review_status: str
+) -> OutreachRow | None:
+    row = await session.get(OutreachRow, outreach_id)
+    if row is None:
+        return None
+    row.review_status = review_status
+    await session.flush()
+    return row
+
+
+async def edit_outreach(
+    session: AsyncSession, outreach_id: str, *, message: str, reason: str
+) -> OutreachRow | None:
+    row = await session.get(OutreachRow, outreach_id)
+    if row is None:
+        return None
+    row.message = message
+    row.reason = reason
+    row.review_status = "edited"
+    row.sent_status = "queued"
+    await session.flush()
+    return row
+
+
+async def mark_outreach_sent(session: AsyncSession, outreach_id: str) -> OutreachRow | None:
+    row = await session.get(OutreachRow, outreach_id)
+    if row is None:
+        return None
+    row.sent_status = "sent"
+    row.status = "sent"
+    row.sent_at = utcnow()
+    await session.flush()
+    return row
+
+
+async def update_outreach_response(
+    session: AsyncSession,
+    outreach_id: str,
+    *,
+    response_status: str,
+    outcome: str = "",
+    next_check_at: datetime | None = None,
+) -> OutreachRow | None:
+    row = await session.get(OutreachRow, outreach_id)
+    if row is None:
+        return None
+    row.response_status = response_status
+    if outcome:
+        row.outcome = outcome
+    row.last_checked_at = utcnow()
+    if next_check_at is not None:
+        row.next_check_at = next_check_at
+    await session.flush()
+    return row
+
+
+async def mark_outreach_checked(
+    session: AsyncSession, outreach_id: str, *, next_check_at: datetime
+) -> OutreachRow | None:
+    row = await session.get(OutreachRow, outreach_id)
+    if row is None:
+        return None
+    row.last_checked_at = utcnow()
+    row.next_check_at = next_check_at
+    await session.flush()
+    return row
+
+
+# --------------------------------------------------------------------------
+# Outreach monitoring
+# --------------------------------------------------------------------------
+
+
+def monitor_serialize(row: OutreachMonitorRow) -> dict[str, Any]:
+    return {
+        "source": row.source,
+        "configured": row.configured,
+        "status": row.status,
+        "detail": row.detail,
+        "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else None,
+        "next_check_at": row.next_check_at.isoformat() if row.next_check_at else None,
+    }
+
+
+async def upsert_monitor(
+    session: AsyncSession,
+    *,
+    source: str,
+    configured: bool,
+    status: str = "unavailable",
+    detail: str = "",
+    last_checked_at: datetime | None = None,
+    next_check_at: datetime | None = None,
+) -> OutreachMonitorRow:
+    row = await session.get(OutreachMonitorRow, source)
+    if row is None:
+        row = OutreachMonitorRow(source=source, configured=configured, status=status)
+        session.add(row)
+    row.configured = configured
+    row.status = status
+    if detail:
+        row.detail = detail
+    if last_checked_at is not None:
+        row.last_checked_at = last_checked_at
+    if next_check_at is not None:
+        row.next_check_at = next_check_at
+    await session.flush()
+    return row
+
+
+async def list_monitors(session: AsyncSession) -> list[OutreachMonitorRow]:
+    result = await session.execute(select(OutreachMonitorRow).order_by(OutreachMonitorRow.source))
     return list(result.scalars().all())
 
 

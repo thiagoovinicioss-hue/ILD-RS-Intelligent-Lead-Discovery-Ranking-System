@@ -26,6 +26,7 @@ from ildrs.storage.repositories import (
     businesses_with_features,
     find_duplicate_candidate,
     get_business,
+    high_value_leads,
     list_businesses,
     set_business_collected,
     store_business_features,
@@ -243,10 +244,16 @@ async def rate_stage(
     validator = FeatureValidator()
     logger.info("rating businesses with model '%s'", model.name)
 
+    settings = get_settings()
+    high_threshold = settings.outreach_high_value_rating
     async with db.session() as session:
         rows = await businesses_with_features(session, limit=limit)
+        existing_high = {
+            lead_id for lead_id, _, _ in await high_value_leads(session, threshold=high_threshold)
+        }
 
     rated = 0
+    newly_high: list[tuple[str, str, float]] = []
     for row in rows:
         await check_cancel(cancel)
         vector = _vector_from_stored(row)
@@ -254,6 +261,7 @@ async def rate_stage(
         # Confidence is filled from data-availability when the model does not
         # provide its own estimate (V1 leaves it at 0 by design).
         confidence = result.confidence or validator.validate(vector).availability
+        expected_value = result.metadata.get("expected_value") if result.metadata else None
         async with db.session() as session:
             await upsert_lead(
                 session,
@@ -263,9 +271,19 @@ async def rate_stage(
                 model=result.model,
                 model_version=result.model_version,
                 features=result.to_dict(),
+                expected_value=expected_value,
             )
             await session.commit()
         rated += 1
+        if result.rating >= high_threshold and row.id not in existing_high:
+            newly_high.append((row.id, row.name, result.rating))
+
+    if newly_high:
+        names = ", ".join(name for _, name, _ in newly_high[:5])
+        await notifier.high_value_lead(
+            business_name=names or f"{len(newly_high)} lead(s)",
+            rating=max(rating for _, _, rating in newly_high),
+        )
 
     await notifier.send(
         "info",
@@ -396,6 +414,8 @@ async def verify_stage(
         "Verification complete",
         f"Re-verified {verified} business(es); {errors} error(s).",
     )
+    if errors:
+        await notifier.verification_failed(errors=errors)
     return {"verified": verified, "errors": errors}
 
 

@@ -39,6 +39,44 @@ class Notifier:
         if self.settings.notify_webhook_url:
             await self._send_webhook(level, title, body)
 
+    # -- domain event helpers ---------------------------------------------
+    # Keep notification titles stable so operators and the dashboard can
+    # recognize and filter them.
+
+    async def new_response(self, *, business_name: str, channel: str, detail: str = "") -> None:
+        body = f"{business_name} responded on {channel}."
+        if detail:
+            body = f"{body} {detail}"
+        await self.send("info", "New response", body)
+
+    async def high_value_lead(self, *, business_name: str, rating: float) -> None:
+        await self.send(
+            "info",
+            "High-value lead detected",
+            f"{business_name} rated {rating:.1f}/100 — review recommended.",
+        )
+
+    async def verification_failed(self, *, errors: int, detail: str = "") -> None:
+        body = f"{errors} business(es) could not be verified."
+        if detail:
+            body = f"{body} {detail}"
+        await self.send("warning", "Verification failed", body)
+
+    async def provider_quota(self, *, source: str, detail: str = "") -> None:
+        body = f"Provider {source} refused a request."
+        if detail:
+            body = f"{body} {detail}"
+        await self.send("error", "Provider quota issue", body)
+
+    async def background_job_failed(self, *, stage: str, detail: str = "") -> None:
+        body = f"Background job '{stage}' failed."
+        if detail:
+            body = f"{body} {detail}"
+        await self.send("error", "Background job failed", body)
+
+    async def monitor_issue(self, *, source: str, detail: str) -> None:
+        await self.send("warning", f"Monitoring unavailable ({source})", detail)
+
     async def _send_webhook(self, level: str, title: str, body: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:

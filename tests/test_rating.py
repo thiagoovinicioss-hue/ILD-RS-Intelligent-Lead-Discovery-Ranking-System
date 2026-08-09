@@ -93,6 +93,13 @@ class TestCalibratedWeightsModel:
         with pytest.raises(ModelNotReadyError):
             model.predict(make_vector())
 
+    def test_predict_emits_expected_value_metadata(self):
+        model = CalibratedWeightsModel(min_samples=5)
+        model.fit(self._samples(10))
+        result = model.predict(make_vector())
+        assert result.metadata["expected_value"]["prob_state"] in ("estimated", "unknown")
+        assert "expected_value" in result.metadata
+
     def test_no_positive_correlation_keeps_fallback(self):
         model = CalibratedWeightsModel(min_samples=2, weights={"a": 1.0, "b": 0.0})
         samples = [

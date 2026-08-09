@@ -386,6 +386,69 @@ tbody tr:last-child td {
   color: var(--text-dim);
 }
 
+.muted {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+/* ---- lead rows --------------------------------------------------------- */
+tbody tr.lead-row {
+  cursor: pointer;
+}
+
+tbody tr.lead-row:focus {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: -2px;
+}
+
+.lead-detail {
+  border-top: var(--border-w) solid var(--border);
+}
+
+.lead-detail .phead {
+  margin-bottom: var(--sp-3);
+}
+
+.lead-detail h3 {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.lead-summary {
+  margin-bottom: var(--sp-3);
+}
+
+.detail-table {
+  overflow-x: auto;
+}
+
+.detail-table table td,
+.detail-table table th {
+  white-space: nowrap;
+}
+
+tr.detail-sub td {
+  border-bottom: none;
+  padding-top: 0;
+  padding-bottom: var(--sp-2);
+}
+
+.detail-explanations {
+  margin-top: var(--sp-3);
+}
+
+.detail-outreach {
+  margin-top: var(--sp-3);
+}
+
+.detail-outreach h3 {
+  margin-top: 0;
+}
+
 .rank {
   font-family: var(--font-mono);
   color: var(--accent);
@@ -570,8 +633,108 @@ tbody tr:last-child td {
   animation: pulse 1.6s var(--ease) infinite;
 }
 
-/* ---- responsive ------------------------------------------------------- */
-@media (max-width: 1080px) {
+/* ---- outreach review queue -------------------------------------------- */
+.review-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin: var(--sp-3) 0;
+  overflow: hidden;
+}
+
+.rc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-sunken);
+}
+
+.rc-head .rc-title {
+  font-weight: 600;
+}
+
+.rc-head .hint {
+  text-align: right;
+}
+
+.rc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.rc-body {
+  padding: 0 var(--sp-4);
+}
+
+.rc-reason {
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-sunken);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+.rc-msg {
+  margin: var(--sp-2) 0 var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.rc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.rc-actions button {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rc-actions button.rc-approve {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.rc-actions button.rc-reject {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.rc-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.monitor-line .k {
+  width: 9em;
+}
+
+/* ---- responsive ------------------------------------------------------- */@media (max-width: 1080px) {
   .layout {
     grid-template-columns: 1fr;
   }

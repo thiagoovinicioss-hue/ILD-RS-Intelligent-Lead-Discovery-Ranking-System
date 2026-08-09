@@ -111,6 +111,20 @@ class Settings(BaseSettings):
     verify_interval_hours: float = 24.0
     refresh_interval_hours: float = 6.0
 
+    # Outreach / review ---------------------------------------------------
+    outreach_message_style: str = "professional"
+    outreach_default_channel: str = "email"
+    outreach_high_value_rating: float = 70.0
+    outreach_auto_prepare: bool = True
+    outreach_max_active_reviews: int = 50
+
+    # Response monitoring --------------------------------------------------
+    # Which channel (if any) is authorized to check for responses. "none"
+    # means no integration is configured: the dashboard must clearly report
+    # that verification is unavailable.
+    outreach_monitor_source: str = "none"
+    outreach_monitor_interval_minutes: float = 60.0
+
     # Notifications -------------------------------------------------------
     notify_webhook_url: str = ""
 
@@ -153,6 +167,14 @@ class Settings(BaseSettings):
         value = value.strip()
         if value and not _is_lat_lng(value):
             raise ValueError(f"ILD_DISCOVERY_LOCATION must be 'lat,lng', got '{value}'")
+        return value
+
+    @field_validator("outreach_monitor_source")
+    @classmethod
+    def _monitor_source_supported(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"none", "google_places"}:
+            raise ValueError(f"unsupported monitor source '{value}' (none | google_places)")
         return value
 
     # -- helpers ----------------------------------------------------------
@@ -215,6 +237,12 @@ class Settings(BaseSettings):
             "verify_interval_hours": self.verify_interval_hours,
             "refresh_interval_hours": self.refresh_interval_hours,
             "notify_webhook_enabled": bool(self.notify_webhook_url),
+            "outreach_message_style": self.outreach_message_style,
+            "outreach_default_channel": self.outreach_default_channel,
+            "outreach_high_value_rating": self.outreach_high_value_rating,
+            "outreach_auto_prepare": self.outreach_auto_prepare,
+            "outreach_monitor_source": self.outreach_monitor_source,
+            "outreach_monitor_interval_minutes": self.outreach_monitor_interval_minutes,
             "api_host": self.api_host,
             "api_port": self.api_port,
             "log_level": self.log_level,

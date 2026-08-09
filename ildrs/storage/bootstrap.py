@@ -26,11 +26,32 @@ _BUSINESS_UPGRADE_COLUMNS: dict[str, str] = {
     "deduped_at": "DATETIME",
 }
 
+_LEAD_UPGRADE_COLUMNS: dict[str, str] = {
+    "expected_value": "JSON",
+}
+
+_OUTREACH_UPGRADE_COLUMNS: dict[str, str] = {
+    "message": "TEXT",
+    "reason": "TEXT",
+    "created_at": "DATETIME",
+    "review_status": "VARCHAR(16)",
+    "sent_status": "VARCHAR(16)",
+    "response_status": "VARCHAR(16)",
+    "outcome": "VARCHAR(16)",
+    "sent_at": "DATETIME",
+    "last_checked_at": "DATETIME",
+    "next_check_at": "DATETIME",
+}
+
 
 async def _ensure_columns(db: Database) -> None:
     """Add missing columns to existing tables (no-op on fresh schemas)."""
     async with db.engine.begin() as conn:
-        for table, columns in (("businesses", _BUSINESS_UPGRADE_COLUMNS),):
+        for table, columns in (
+            ("businesses", _BUSINESS_UPGRADE_COLUMNS),
+            ("leads", _LEAD_UPGRADE_COLUMNS),
+            ("outreach", _OUTREACH_UPGRADE_COLUMNS),
+        ):
             existing = {
                 row[1]
                 for row in (await conn.execute(text(f"PRAGMA table_info({table})"))).fetchall()
@@ -42,6 +63,8 @@ async def _ensure_columns(db: Database) -> None:
         # create_all skips indexes on existing tables; recreate them explicitly
         for index in (
             "CREATE INDEX IF NOT EXISTS ix_businesses_duplicate ON businesses (is_duplicate)",
+            "CREATE INDEX IF NOT EXISTS ix_outreach_review ON outreach (review_status)",
+            "CREATE INDEX IF NOT EXISTS ix_outreach_sent ON outreach (sent_status)",
         ):
             await conn.execute(text(index))
 
@@ -85,7 +108,15 @@ async def reset(db: Database) -> None:
 def table_counts_query() -> str:
     return ";".join(
         f"SELECT '{t}' AS table_name, COUNT(*) AS n FROM {t}"
-        for t in ("businesses", "leads", "outreach", "historical_outcomes", "jobs", "notifications")
+        for t in (
+            "businesses",
+            "leads",
+            "outreach",
+            "outreach_monitors",
+            "historical_outcomes",
+            "jobs",
+            "notifications",
+        )
     )
 
 
@@ -97,6 +128,7 @@ async def database_counts(db: Database) -> dict[str, int]:
             "businesses",
             "leads",
             "outreach",
+            "outreach_monitors",
             "historical_outcomes",
             "jobs",
             "notifications",

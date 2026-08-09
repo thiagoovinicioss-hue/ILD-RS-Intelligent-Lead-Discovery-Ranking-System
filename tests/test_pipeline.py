@@ -67,6 +67,138 @@ async def test_rate_stage_creates_leads_with_confidence(db):
     assert all(lead.model == "v1" for lead in leads)
 
 
+async def test_rate_stage_persists_expected_value(db, monkeypatch):
+    import ildrs.config as config_module
+    from ildrs.config import Settings
+
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            database_url=f"sqlite+aiosqlite:///{db.engine.url.database}",
+            source="fixture",
+            ev_prior_probability=0.15,
+            ev_deal_value=1000.0,
+            ev_cost=50.0,
+        ),
+    )
+
+    source = FixtureSource()
+    await discover_stage(db, source, Notifier(db), limit=3)
+    await collect_stage(db, source, Notifier(db))
+    await analyze_stage(db, Notifier(db))
+    await rate_stage(db, Notifier(db))
+
+    from ildrs.storage.repositories import lead_serialize, list_leads
+
+    async with db.session() as session:
+        leads = await list_leads(session, limit=10)
+        items = [lead_serialize(x) for x in leads]
+
+    assert len(items) == 3
+    for item in items:
+        assert item["expected_value"] is not None
+        assert item["expected_value"]["ready"] is True
+        assert item["expected_value"]["prob_state"] == "estimated"
+        assert item["expected_value"]["expected_value"] == pytest.approx(100.0)
+
+
+async def test_rate_stage_ev_unknown_when_not_configured(db):
+    source = FixtureSource()
+    await discover_stage(db, source, Notifier(db), limit=3)
+    await collect_stage(db, source, Notifier(db))
+    await analyze_stage(db, Notifier(db))
+    await rate_stage(db, Notifier(db))
+
+    from ildrs.storage.repositories import lead_serialize, list_leads
+
+    async with db.session() as session:
+        leads = await list_leads(session, limit=10)
+        items = [lead_serialize(x) for x in leads]
+
+    for item in items:
+        assert item["expected_value"] is not None
+        assert item["expected_value"]["ready"] is False
+        assert item["expected_value"]["prob_state"] == "unknown"
+
+
+async def test_v2_calibrates_and_rates_after_outcomes(db, monkeypatch):
+    import ildrs.config as config_module
+    from ildrs.config import Settings
+    from ildrs.outreach.workflow import OutreachWorkflow
+    from ildrs.storage.repositories import list_leads
+
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            database_url=f"sqlite+aiosqlite:///{db.engine.url.database}",
+            source="fixture",
+            rating_model="v2",
+            rating_min_samples=3,
+        ),
+    )
+
+    source = FixtureSource()
+    notifier = Notifier(db)
+    await discover_stage(db, source, notifier, limit=3)
+    await collect_stage(db, source, notifier)
+    await analyze_stage(db, notifier)
+    await rate_stage(db, notifier)
+
+    # Record enough definitive outcomes for V2 to calibrate.
+    workflow = OutreachWorkflow(db)
+    async with db.session() as session:
+        leads = await list_leads(session, limit=100)
+    for i, lead in enumerate(leads):
+        opened = await workflow.open(lead_id=lead.id, channel="email", note="test")
+        outcome = "interested" if i < 2 else "no_response"
+        await workflow.transition(outreach_id=opened.data["id"], status=outcome)
+    assert await workflow.outcome_count() >= 3
+
+    result = await rate_stage(db, notifier)
+    assert result["model"] == "v2"
+    assert result["model_version"] == "v2.0"
+
+    async with db.session() as session:
+        re_rated = await list_leads(session, limit=100)
+    assert all(lead.model == "v2" for lead in re_rated)
+    assert all(lead.model_version == "v2.0" for lead in re_rated)
+
+
+async def test_v2_falls_back_to_v1_without_enough_outcomes(db, monkeypatch):
+    import ildrs.config as config_module
+    from ildrs.config import Settings
+    from ildrs.storage.repositories import list_leads
+
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            database_url=f"sqlite+aiosqlite:///{db.engine.url.database}",
+            source="fixture",
+            rating_model="v2",
+            rating_min_samples=20,
+        ),
+    )
+
+    source = FixtureSource()
+    notifier = Notifier(db)
+    await discover_stage(db, source, notifier, limit=3)
+    await collect_stage(db, source, notifier)
+    await analyze_stage(db, notifier)
+    await rate_stage(db, notifier)
+
+    async with db.session() as session:
+        leads = await list_leads(session, limit=100)
+    # Without outcomes the pipeline must not fake V2: it predicts with V1
+    # weights while flagging the fallback.
+    assert all(lead.model == "v1" for lead in leads)
+    for lead in leads:
+        assert lead.features["metadata"].get("fallback")
+        assert "not calibrated" in lead.features["metadata"]["fallback"]
+
+
 async def test_full_pipeline_ranks_leads(db):
     orchestrator = await _pipeline(db)
     results = await orchestrator.run_full_pipeline(cancel=asyncio.Event())

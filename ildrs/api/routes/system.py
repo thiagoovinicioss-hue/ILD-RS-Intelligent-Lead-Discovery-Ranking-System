@@ -67,7 +67,7 @@ async def system_status(request: Request):
     interested = sum(1 for o in outcome_rows if o.outcome == "interested")
     converted = sum(1 for o in outcome_rows if o.outcome == "converted")
     next_verify = _next_verify(request)
-    model = _model_status()
+    model = _model_status(outcome_count=outcomes)
 
     ranked = sum(1 for s in lead_statuses.values())
     return {
@@ -91,6 +91,21 @@ async def system_status(request: Request):
             "model": model["name"],
             "model_version": model["version"],
             "model_status": model,
+            "ev": {
+                "ready": settings.ev_deal_value is not None and settings.ev_cost is not None,
+                "prob_state": "estimated",
+                "probability": settings.ev_prior_probability,
+                "deal_value": settings.ev_deal_value,
+                "cost": settings.ev_cost,
+                "expected_value": (
+                    round(
+                        settings.ev_prior_probability * settings.ev_deal_value - settings.ev_cost,
+                        4,
+                    )
+                    if settings.ev_deal_value is not None and settings.ev_cost is not None
+                    else None
+                ),
+            },
         },
         "ranking": {
             "leads_ranked": ranked,
@@ -104,6 +119,17 @@ async def system_status(request: Request):
             "interested": interested,
             "conversions": converted,
             "historical_outcomes": outcomes,
+        },
+        "review_queue": {
+            "pending": await ctx.review.count_pending(),
+            "approved": await _count_outreach_status(request, "approved"),
+            "rejected": await _count_outreach_status(request, "rejected"),
+        },
+        "monitoring": {
+            "configured": settings.outreach_monitor_source != "none",
+            "source": settings.outreach_monitor_source,
+            "interval_minutes": settings.outreach_monitor_interval_minutes,
+            "sources": await ctx.monitor.status(),
         },
         "verification": {
             "last_verification": last_verified,
@@ -180,12 +206,12 @@ def _app_version() -> str:
     return __version__
 
 
-def _model_status() -> dict:
+def _model_status(outcome_count: int = 0) -> dict:
     settings = get_settings()
     try:
         model = create_model(settings.rating_model)
         status = model.status()
-        status["status"] = _model_readiness(status)
+        status["status"] = _model_readiness(status, outcome_count)
         status["configured"] = settings.rating_model
         return status
     except Exception:
@@ -197,16 +223,16 @@ def _model_status() -> dict:
         }
 
 
-def _model_readiness(status: dict) -> str:
+def _model_readiness(status: dict, outcome_count: int = 0) -> str:
     if status.get("error"):
         return "error"
     if status.get("implemented") is False:
         return "unavailable — not implemented"
-    if "fitted" in status:
-        if status["fitted"]:
-            return "calibrated"
-        needs = status.get("samples", 0)
+    if status.get("requires_fit") or "min_samples" in status:
+        needs = outcome_count
         minimum = status.get("min_samples", 0)
+        if needs >= minimum:
+            return "calibrated"
         return f"awaiting data — needs {needs}/{minimum} outcomes"
     return "operational"
 
@@ -214,3 +240,12 @@ def _model_readiness(status: dict) -> str:
 def _next_verify(request: Request) -> str | None:
     value = getattr(request.app.state, "_next_verify", None)
     return value
+
+
+async def _count_outreach_status(request: Request, review_status: str) -> int:
+    from ildrs.storage.repositories import list_outreach
+
+    ctx = request.app.state.context
+    async with ctx.db.session() as session:
+        rows = await list_outreach(session, limit=100000, review_status=review_status)
+        return len(rows)
