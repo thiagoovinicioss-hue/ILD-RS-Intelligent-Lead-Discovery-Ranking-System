@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+
+# Environment & secrets
+.env
+*.key
+*.pem
+
+# Runtime artifacts
+*.db
+*.sqlite
+*.sqlite3
+ildrs.db
+/data/
+logs/
+*.log
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+node_modules/

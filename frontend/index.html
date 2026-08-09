@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ILD-RS · Control Plane</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">▮</span>
+      <span>ILD-RS</span>
+      <span class="ver" id="version">v0.0.0</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="status-pill" id="sys-status"><span class="dot"></span><span>connecting</span></span>
+    <span class="status-pill source" id="sys-source">source: …</span>
+    <span class="clock" id="clock">--:--:--</span>
+  </header>
+
+  <main class="layout">
+    <!-- ============ main column ============ -->
+    <section class="col-main">
+      <!-- KPI grid -->
+      <div class="kpis" id="kpis">
+        <div class="kpi"><span class="label">businesses found</span><span class="value" data-kpi="businesses_found">–</span><span class="sub" data-kpi-sub="last_discovery">–</span></div>
+        <div class="kpi"><span class="label">analyzed</span><span class="value" data-kpi="businesses_analyzed">–</span><span class="sub" data-kpi-sub="valid_feature_vectors">–</span></div>
+        <div class="kpi"><span class="label">leads ranked</span><span class="value" data-kpi="leads_ranked">–</span><span class="sub" data-kpi-sub="high_quality_leads">–</span></div>
+        <div class="kpi"><span class="label">conversions</span><span class="value" data-kpi="conversions">–</span><span class="sub" data-kpi-sub="historical_outcomes">–</span></div>
+        <div class="kpi"><span class="label">pending reviews</span><span class="value" data-kpi="pending_reviews">–</span><span class="sub">new leads awaiting review</span></div>
+        <div class="kpi"><span class="label">outreach active</span><span class="value" data-kpi="outreach_active">–</span><span class="sub">leads in outreach</span></div>
+        <div class="kpi"><span class="label">responses</span><span class="value" data-kpi="responses">–</span><span class="sub">responded+interested+converted</span></div>
+        <div class="kpi"><span class="label">interested</span><span class="value" data-kpi="interested">–</span><span class="sub">positive signals</span></div>
+      </div>
+
+      <!-- system status -->
+      <section class="panel">
+        <div class="phead">
+          <h2>System status</h2>
+          <span class="hint live" id="live-indicator">polling</span>
+        </div>
+        <div class="term" id="system-term">
+          <div class="loading">connecting to /api/v1/system/status …</div>
+        </div>
+      </section>
+
+      <!-- leads -->
+      <section class="panel">
+        <div class="phead">
+          <h2>Ranked leads</h2>
+          <span class="hint">top 50 · by rank</span>
+        </div>
+        <div class="tablewrap">
+          <table id="leads-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>business</th>
+                <th>category</th>
+                <th>rating</th>
+                <th>conf</th>
+                <th>status</th>
+                <th>model</th>
+                <th>updated</th>
+              </tr>
+            </thead>
+            <tbody id="leads-body">
+              <tr><td colspan="8" class="loading">loading leads …</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ side column ============ -->
+    <section class="col-side">
+      <!-- stage runner -->
+      <section class="panel">
+        <div class="phead"><h2>Pipeline</h2><span class="hint">run stages</span></div>
+        <div class="pbody">
+          <div class="stages" id="stages"></div>
+        </div>
+      </section>
+
+      <!-- model -->
+      <section class="panel">
+        <div class="phead"><h2>Rating model</h2><span class="hint">configured</span></div>
+        <div class="pbody" id="model-box">
+          <div class="loading">–</div>
+        </div>
+      </section>
+
+      <!-- notifications -->
+      <section class="panel">
+        <div class="phead">
+          <h2>Notifications</h2>
+          <button class="badge mute" id="mark-read" type="button">mark read</button>
+        </div>
+        <div class="pbody notif-list" id="notifications">
+          <div class="loading">none yet</div>
+        </div>
+      </section>
+
+      <!-- active jobs -->
+      <section class="panel">
+        <div class="phead"><h2>Active jobs</h2><span class="hint">scheduler</span></div>
+        <div class="pbody" id="jobs-box">
+          <div class="loading">–</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="uptime">
+    <span id="uptime">uptime –</span>
+    <span id="db-foot">db –</span>
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

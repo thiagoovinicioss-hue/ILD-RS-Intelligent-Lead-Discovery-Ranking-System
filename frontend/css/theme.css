@@ -1,0 +1,74 @@
+/* ==========================================================================
+   ILD-RS · theme.css
+   Centralized theme / palette. Every color, radius, spacing, font, glow and
+   motion value used by the dashboard is declared here. To re-skin the whole
+   interface, edit only this file.
+   ========================================================================== */
+
+:root {
+  /* ---- palette (dark, technical, restrained) -------------------------- */
+  --bg:            #0a0e13;   /* page background                          */
+  --bg-raised:     #0f141b;   /* panels / cards                          */
+  --bg-sunken:     #070a0e;   /* terminal blocks, table stripes          */
+  --border:        #1c2530;   /* hairline borders                        */
+  --border-strong: #2a3644;   /* hover / focused borders                  */
+
+  --text:          #c8d3e0;   /* primary text                            */
+  --text-dim:      #7d8b9e;   /* secondary text                          */
+  --text-faint:    #556270;   /* tertiary / labels                       */
+
+  --accent:        #35c9b4;   /* primary accent (teal)                   */
+  --accent-dim:    rgba(53, 201, 180, 0.12);
+  --accent-soft:   rgba(53, 201, 180, 0.55);
+
+  --ok:            #3fb950;   /* success / operational                   */
+  --warn:          #d29922;   /* warnings / degraded                     */
+  --danger:        #e5534b;   /* errors / failures                       */
+  --info:          #4c8df6;   /* informational                           */
+
+  --ok-dim:        rgba(63, 185, 80, 0.12);
+  --warn-dim:      rgba(210, 153, 34, 0.12);
+  --danger-dim:    rgba(229, 83, 75, 0.12);
+  --info-dim:      rgba(76, 141, 246, 0.12);
+
+  /* ---- typography ---------------------------------------------------- */
+  --font-sans: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, "Cascadia Mono",
+    "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-xs:  0.6875rem;   /* 11px  terminal meta                        */
+  --fs-sm:  0.75rem;     /* 12px  labels, table cells                  */
+  --fs-md:  0.8125rem;   /* 13px  body                                */
+  --fs-lg:  0.9375rem;   /* 15px  panel titles                        */
+  --fs-xl:  1.375rem;    /* 22px  KPI values                          */
+  --fs-2xl: 2rem;        /* 32px  hero numbers                        */
+
+  /* ---- spacing ------------------------------------------------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* ---- geometry ------------------------------------------------------ */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --border-w: 1px;
+
+  /* ---- glow (subtle, restrained) -------------------------------------- */
+  --glow-sm:  0 0 0 1px rgba(53, 201, 180, 0.08), 0 0 14px rgba(53, 201, 180, 0.06);
+  --glow-focus: 0 0 0 1px rgba(53, 201, 180, 0.25), 0 0 18px rgba(53, 201, 180, 0.12);
+
+  /* ---- motion (restrained) -------------------------------------------- */
+  --dur-fast: 120ms;
+  --dur-med:  240ms;
+  --ease: cubic-bezier(0.33, 1, 0.68, 1);
+
+  /* ---- layout --------------------------------------------------------- */
+  --topbar-h: 56px;
+  --maxw: 1400px;
+  --sidebar-w: 240px;
+}
