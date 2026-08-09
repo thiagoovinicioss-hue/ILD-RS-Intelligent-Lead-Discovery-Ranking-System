@@ -11,7 +11,10 @@ from ildrs.storage.repositories import (
     get_lead,
     lead_serialize,
     list_leads,
+    outcome_serialize,
+    outcomes_for_lead,
     outreach_for_lead,
+    outreach_serialize,
     set_lead_status,
 )
 
@@ -36,16 +39,7 @@ async def leads_route(
         items = []
         for row in rows:
             item = lead_serialize(row)
-            item["outreach"] = [
-                {
-                    "id": o.id,
-                    "channel": o.channel,
-                    "status": o.status,
-                    "note": o.note,
-                    "occurred_at": o.occurred_at.isoformat() if o.occurred_at else None,
-                }
-                for o in await outreach_for_lead(session, row.id)
-            ]
+            item["business"] = business_serialize(row.business) if row.business else None
             items.append(item)
         return {"items": items, "limit": limit, "offset": offset, "total": len(items)}
 
@@ -59,15 +53,9 @@ async def lead_detail(lead_id: str, request: Request):
             raise HTTPException(status_code=404, detail="lead not found")
         item = lead_serialize(row)
         item["business"] = business_serialize(row.business) if row.business else None
-        item["outreach"] = [
-            {
-                "id": o.id,
-                "channel": o.channel,
-                "status": o.status,
-                "note": o.note,
-                "occurred_at": o.occurred_at.isoformat() if o.occurred_at else None,
-            }
-            for o in await outreach_for_lead(session, row.id)
+        item["outreach"] = [outreach_serialize(o) for o in await outreach_for_lead(session, row.id)]
+        item["outcomes"] = [
+            outcome_serialize(o) for o in await outcomes_for_lead(session, row.id)
         ]
         return item
 

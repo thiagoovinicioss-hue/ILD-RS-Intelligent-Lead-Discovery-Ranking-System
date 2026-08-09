@@ -814,6 +814,28 @@ async def count_outcomes(session: AsyncSession) -> int:
     return len(result.scalars().all())
 
 
+async def outcomes_for_lead(session: AsyncSession, lead_id: str) -> list[HistoricalOutcomeRow]:
+    """Historical outcomes recorded against a specific lead (newest first)."""
+    result = await session.execute(
+        select(HistoricalOutcomeRow)
+        .where(HistoricalOutcomeRow.lead_id == lead_id)
+        .order_by(HistoricalOutcomeRow.recorded_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+def outcome_serialize(row: HistoricalOutcomeRow) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "business_id": row.business_id,
+        "lead_id": row.lead_id,
+        "outcome": row.outcome,
+        "outcome_value": row.outcome_value,
+        "features": row.features,
+        "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+    }
+
+
 def outcome_domain(row: HistoricalOutcomeRow) -> HistoricalOutcome:
     return HistoricalOutcome(
         id=row.id,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ILD-RS · Control Plane</title>
+  <title>ILD-RS · Command Center</title>
   <link rel="icon" href="data:," />
   <!-- relative paths so the dashboard also works on GitHub Pages, where the
        site lives under a subpath (…/ILD-RS-…/css/…) rather than the domain root -->
@@ -18,125 +18,201 @@
       <span class="ver" id="version">v0.0.0</span>
     </div>
     <div class="spacer"></div>
+    <span class="status-pill api" id="sys-api" title="API base">api: same-origin</span>
     <span class="status-pill" id="sys-status"><span class="dot"></span><span>connecting</span></span>
     <span class="status-pill source" id="sys-source">source: …</span>
     <span class="clock" id="clock">--:--:--</span>
   </header>
 
   <main class="layout">
-    <!-- ============ main column ============ -->
-    <section class="col-main">
-      <!-- KPI grid -->
-      <div class="kpis" id="kpis">
-        <div class="kpi"><span class="label">businesses found</span><span class="value" data-kpi="businesses_found">–</span><span class="sub" data-kpi-sub="last_discovery">–</span></div>
-        <div class="kpi"><span class="label">analyzed</span><span class="value" data-kpi="businesses_analyzed">–</span><span class="sub" data-kpi-sub="valid_feature_vectors">–</span></div>
-        <div class="kpi"><span class="label">leads ranked</span><span class="value" data-kpi="leads_ranked">–</span><span class="sub" data-kpi-sub="high_quality_leads">–</span></div>
-        <div class="kpi"><span class="label">conversions</span><span class="value" data-kpi="conversions">–</span><span class="sub" data-kpi-sub="historical_outcomes">–</span></div>
-        <div class="kpi"><span class="label">pending reviews</span><span class="value" data-kpi="pending_reviews">–</span><span class="sub">new leads awaiting review</span></div>
-        <div class="kpi"><span class="label">outreach active</span><span class="value" data-kpi="outreach_active">–</span><span class="sub">leads in outreach</span></div>
-        <div class="kpi"><span class="label">responses</span><span class="value" data-kpi="responses">–</span><span class="sub">responded+interested+converted</span></div>
-        <div class="kpi"><span class="label">interested</span><span class="value" data-kpi="interested">–</span><span class="sub">positive signals</span></div>
+    <!-- ============ 1 · SYSTEM STATUS ============ -->
+    <section class="panel span-12">
+      <div class="phead">
+        <h2>System status</h2>
+        <span class="hint live" id="live-indicator">polling</span>
       </div>
-
-      <!-- system status -->
-      <section class="panel">
-        <div class="phead">
-          <h2>System status</h2>
-          <span class="hint live" id="live-indicator">polling</span>
-        </div>
-        <div class="term" id="system-term">
+      <div class="pbody">
+        <div class="term term-grid" id="system-term">
           <div class="loading">connecting to /api/v1/system/status …</div>
         </div>
-      </section>
-
-      <!-- leads -->
-      <section class="panel">
-        <div class="phead">
-          <h2>Ranked leads</h2>
-          <span class="hint">top 50 · by rank · click a row for details</span>
-        </div>
-        <div class="tablewrap">
-          <table id="leads-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>business</th>
-                <th>category</th>
-                <th>rating</th>
-                <th>conf</th>
-                <th>status</th>
-                <th>model</th>
-                <th>EV</th>
-                <th>updated</th>
-              </tr>
-            </thead>
-            <tbody id="leads-body">
-              <tr><td colspan="9" class="loading">loading leads …</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="lead-detail" class="pbody lead-detail" hidden></div>
-      </section>
-
-      <!-- review queue -->
-      <section class="panel">
-        <div class="phead">
-          <h2>Outreach review queue</h2>
-          <span class="hint">human approval is required before any message is sent</span>
-        </div>
-        <div class="pbody" id="review-queue">
-          <div class="loading">loading review queue …</div>
-        </div>
-      </section>
+      </div>
     </section>
 
-    <!-- ============ side column ============ -->
-    <section class="col-side">
-      <!-- stage runner -->
-      <section class="panel">
-        <div class="phead"><h2>Pipeline</h2><span class="hint">run stages</span></div>
-        <div class="pbody">
-          <div class="stages" id="stages"></div>
+    <!-- ============ 2 · KPI STRIP ============ -->
+    <section class="span-12">
+      <div class="kpis" id="kpis">
+        <div class="kpi">
+          <span class="label">businesses found</span><span class="value" data-kpi="businesses_found">–</span>
+          <span class="sub" data-kpi-sub="businesses_collected">–</span>
         </div>
-      </section>
+        <div class="kpi">
+          <span class="label">leads rated</span><span class="value" data-kpi="leads_rated">–</span>
+          <span class="sub" data-kpi-sub="high_quality_leads">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">responses</span><span class="value" data-kpi="responses">–</span>
+          <span class="sub" data-kpi-sub="interested">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">conversions</span><span class="value" data-kpi="conversions">–</span>
+          <span class="sub" data-kpi-sub="historical_outcomes">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">pending review</span><span class="value" data-kpi="pending_reviews">–</span>
+          <span class="sub" data-kpi-sub="approved">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">outreach active</span><span class="value" data-kpi="outreach_active">–</span>
+          <span class="sub" data-kpi-sub="contacted">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">last verification</span><span class="value" data-kpi="last_verification">–</span>
+          <span class="sub" data-kpi-sub="last_verify_rel">–</span>
+        </div>
+        <div class="kpi">
+          <span class="label">next verification</span><span class="value" data-kpi="next_verification">–</span>
+          <span class="sub" data-kpi-sub="next_verify_rel">–</span>
+        </div>
+      </div>
+    </section>
 
-      <!-- model -->
-      <section class="panel">
-        <div class="phead"><h2>Rating model</h2><span class="hint">configured</span></div>
+    <!-- ============ 3 · LEAD PIPELINE ============ -->
+    <section class="panel span-4">
+      <div class="phead">
+        <h2>Lead pipeline</h2>
+        <span class="hint">leads by status</span>
+      </div>
+      <div class="pbody">
+        <div id="lead-pipeline">
+          <div class="loading">loading pipeline …</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 4 · RATING DISTRIBUTION ============ -->
+    <section class="panel span-4">
+      <div class="phead">
+        <h2>Rating distribution</h2>
+        <span class="hint" id="rating-dist-hint">by score bucket</span>
+      </div>
+      <div class="pbody">
+        <div id="rating-distribution">
+          <div class="loading">loading ratings …</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 5 · RESPONSE MONITORING ============ -->
+    <section class="panel span-4">
+      <div class="phead">
+        <h2>Response monitoring</h2>
+        <button class="badge mute" id="monitor-run" type="button">run now</button>
+      </div>
+      <div class="pbody" id="monitor-box">
+        <div class="loading">–</div>
+      </div>
+    </section>
+
+    <!-- ============ 6 · BACKGROUND JOBS ============ -->
+    <section class="panel span-5">
+      <div class="phead"><h2>Background jobs</h2><span class="hint">scheduler</span></div>
+      <div class="pbody" id="jobs-box">
+        <div class="loading">–</div>
+      </div>
+    </section>
+
+    <!-- ============ 7 · PENDING REVIEW ============ -->
+    <section class="panel span-7">
+      <div class="phead">
+        <h2>Pending review</h2>
+        <span class="hint">human approval required before any message is sent</span>
+      </div>
+      <div class="pbody" id="review-queue">
+        <div class="loading">loading review queue …</div>
+      </div>
+    </section>
+
+    <!-- ============ 8 · PIPELINE RUNNER ============ -->
+    <section class="panel span-6">
+      <div class="phead"><h2>Pipeline runner</h2><span class="hint">run stages</span></div>
+      <div class="pbody">
+        <div class="stages" id="stages"></div>
+        <div class="phead model-head"><h2>Rating model</h2><span class="hint">configured</span></div>
         <div class="pbody" id="model-box">
           <div class="loading">–</div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <!-- notifications -->
-      <section class="panel">
-        <div class="phead">
-          <h2>Notifications</h2>
-          <button class="badge mute" id="mark-read" type="button">mark read</button>
-        </div>
-        <div class="pbody notif-list" id="notifications">
-          <div class="loading">none yet</div>
-        </div>
-      </section>
+    <!-- ============ 9 · NOTIFICATIONS ============ -->
+    <section class="panel span-6">
+      <div class="phead">
+        <h2>Notifications</h2>
+        <button class="badge mute" id="mark-read" type="button">mark read</button>
+      </div>
+      <div class="pbody notif-list" id="notifications">
+        <div class="loading">none yet</div>
+      </div>
+    </section>
 
-      <!-- active jobs -->
-      <section class="panel">
-        <div class="phead"><h2>Active jobs</h2><span class="hint">scheduler</span></div>
-        <div class="pbody" id="jobs-box">
-          <div class="loading">–</div>
-        </div>
-      </section>
+    <!-- ============ 10 · LEADS ============ -->
+    <section class="panel span-12">
+      <div class="phead">
+        <h2>Ranked leads</h2>
+        <span class="hint" id="leads-hint">click a row for full details</span>
+      </div>
+      <div class="leads-toolbar">
+        <input type="search" id="lead-search" placeholder="search name / category / location …" autocomplete="off" />
+        <select id="lead-status" title="filter by status">
+          <option value="">all statuses</option>
+          <option value="new">new</option>
+          <option value="reviewed">reviewed</option>
+          <option value="outreach">outreach</option>
+          <option value="contacted">contacted</option>
+          <option value="won">won</option>
+          <option value="lost">lost</option>
+          <option value="dismissed">dismissed</option>
+        </select>
+        <select id="lead-category" title="filter by category"><option value="">all categories</option></select>
+        <label class="range-label">rating
+          <input type="number" id="rating-min" min="0" max="100" step="1" placeholder="min" />
+          – <input type="number" id="rating-max" min="0" max="100" step="1" placeholder="max" />
+        </label>
+        <span class="spacer"></span>
+        <span class="hint" id="leads-count">–</span>
+      </div>
+      <div class="tablewrap">
+        <table id="leads-table">
+          <thead>
+            <tr>
+              <th data-sort="rank">#</th>
+              <th data-sort="name">business</th>
+              <th data-sort="category">category</th>
+              <th>location</th>
+              <th data-sort="rating">rating</th>
+              <th data-sort="confidence">confidence</th>
+              <th>rating explanation</th>
+              <th data-sort="status">status</th>
+              <th data-sort="verified">last verification</th>
+              <th>next action</th>
+            </tr>
+          </thead>
+          <tbody id="leads-body">
+            <tr><td colspan="10" class="loading">loading leads …</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-      <!-- response monitoring -->
-      <section class="panel">
-        <div class="phead">
-          <h2>Response monitoring</h2>
-          <button class="badge mute" id="monitor-run" type="button">run now</button>
-        </div>
-        <div class="pbody" id="monitor-box">
-          <div class="loading">–</div>
-        </div>
-      </section>
+    <!-- ============ LEAD DETAIL ============ -->
+    <section class="panel span-12" id="lead-detail" hidden>
+      <div class="phead">
+        <h2 id="lead-detail-title">Lead detail</h2>
+        <button class="badge mute" id="lead-detail-close" type="button">close</button>
+      </div>
+      <div class="pbody" id="lead-detail-body">
+        <div class="loading">select a lead row</div>
+      </div>
     </section>
   </main>
 

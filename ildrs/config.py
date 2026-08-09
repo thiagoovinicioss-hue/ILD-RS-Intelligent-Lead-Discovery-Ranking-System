@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     # API -----------------------------------------------------------------
     api_host: str = "127.0.0.1"
     api_port: int = 8080
+    # Comma-separated list of origins allowed to call this API cross-origin
+    # (e.g. a GitHub Pages site). Empty means same-origin only.
+    cors_origins: str = ""
 
     # Observability -------------------------------------------------------
     log_level: str = "INFO"
@@ -197,6 +200,10 @@ class Settings(BaseSettings):
             "social_activity": self.weight_social_activity,
         }
         return {k: mapping[k] for k in FEATURE_KEYS}
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def target_categories(self) -> list[str]:

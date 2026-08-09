@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -26,65 +27,45 @@ from ildrs.api.context import AppContext
 from ildrs.api.routes import businesses, discovery, jobs, leads, outreach, system
 from ildrs.api.routes import config as config_route
 from ildrs.config import get_settings
-from ildrs.jobs.definitions import register_periodic_jobs
-from ildrs.jobs.scheduler import Scheduler, next_run_time
-from ildrs.notifications.notifier import Notifier
+from ildrs.jobs.scheduler import next_run_time
 from ildrs.observability.logging import configure_logging
-from ildrs.outreach.monitoring import ResponseMonitor
-from ildrs.outreach.review import ReviewWorkflow
-from ildrs.outreach.workflow import OutreachWorkflow
-from ildrs.pipeline.orchestrator import Orchestrator
-from ildrs.sources.registry import create_source
-from ildrs.storage.bootstrap import init as init_schema
-from ildrs.storage.database import Database
+from ildrs.runtime import build_runtime
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 
-def create_app() -> FastAPI:
+def create_app(context: AppContext | None = None) -> FastAPI:
+    """Build the FastAPI app.
+
+    When ``context`` is provided (CLI ``run``/``serve`` boot their own
+    runtime and print a readiness banner first), the context is reused
+    as-is — the scheduler is not started a second time. Otherwise a full
+    runtime is built and owned by the app's lifespan.
+    """
     configure_logging()
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()
 
-        db = Database()
-        db.connect()
-        await init_schema(db)
+        if context is not None:
+            ctx = context
+        else:
+            ctx = await build_runtime(settings)
 
-        source = create_source(settings.source)
-        notifier = Notifier(db)
-        orchestrator = Orchestrator(db, source, notifier)
-        outreach = OutreachWorkflow(db)
-        review = ReviewWorkflow(db, notifier)
-        monitor = ResponseMonitor(db, notifier)
-        scheduler = Scheduler()
-
-        register_periodic_jobs(scheduler, orchestrator, review=review, monitor=monitor)
-        await scheduler.start()
-
-        context = AppContext(
-            db=db,
-            source=source,
-            notifier=notifier,
-            orchestrator=orchestrator,
-            outreach=outreach,
-            review=review,
-            monitor=monitor,
-            scheduler=scheduler,
-        )
-        app.state.context = context
+        app.state.context = ctx
         app.state._next_verify = next_run_time(
-            settings.verify_interval_hours * 3600, scheduler.started_at
+            settings.verify_interval_hours * 3600, ctx.scheduler.started_at
         ).isoformat()
 
-        await notifier.send("info", "System started", f"ILD-RS v{__version__} API online.")
+        if context is None:
+            await ctx.notifier.send("info", "System started", f"ILD-RS v{__version__} API online.")
 
         try:
             yield
         finally:
-            await _shutdown(context)
+            await _shutdown(ctx)
 
     app = FastAPI(
         title="ILD-RS",
@@ -92,6 +73,8 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    _configure_cors(app)
 
     app.include_router(system.router)
     app.include_router(businesses.router)
@@ -106,6 +89,19 @@ def create_app() -> FastAPI:
 
     _mount_frontend(app)
     return app
+
+
+def _configure_cors(app: FastAPI) -> None:
+    origins = get_settings().cors_origins_list
+    if not origins:
+        return
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 
 async def _shutdown(context: AppContext) -> None:

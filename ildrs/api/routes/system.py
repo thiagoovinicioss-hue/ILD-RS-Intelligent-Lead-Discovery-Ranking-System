@@ -77,6 +77,7 @@ async def system_status(request: Request):
             "google_places_enabled": bool(settings.google_places_api_key),
             "version": _app_version(),
         },
+        "lead_pipeline": lead_statuses,
         "discovery": {
             "businesses_found": businesses,
             "businesses_collected": collected,

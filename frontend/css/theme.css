@@ -58,6 +58,18 @@
   --radius-lg: 10px;
   --border-w: 1px;
 
+  /* ---- chart palette (pipeline stages / buckets) ---------------------- */
+  --chart-new:       #4c8df6;   /* new             */
+  --chart-reviewed:  #35c9b4;   /* reviewed        */
+  --chart-outreach:  #58a6ff;   /* outreach        */
+  --chart-contacted: #d29922;   /* contacted       */
+  --chart-won:       #3fb950;   /* won             */
+  --chart-lost:      #e5534b;   /* lost            */
+  --chart-dismissed: #7d8b9e;   /* dismissed       */
+
+  --chart-bucket:    rgba(53, 201, 180, 0.45);  /* rating histogram      */
+  --chart-track:     rgba(125, 139, 158, 0.14); /* empty bar background  */
+
   /* ---- glow (subtle, restrained) -------------------------------------- */
   --glow-sm:  0 0 0 1px rgba(53, 201, 180, 0.08), 0 0 14px rgba(53, 201, 180, 0.06);
   --glow-focus: 0 0 0 1px rgba(53, 201, 180, 0.25), 0 0 18px rgba(53, 201, 180, 0.12);
@@ -69,6 +81,6 @@
 
   /* ---- layout --------------------------------------------------------- */
   --topbar-h: 56px;
-  --maxw: 1400px;
+  --maxw: 1500px;
   --sidebar-w: 240px;
 }
