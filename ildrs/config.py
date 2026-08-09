@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     # Rating --------------------------------------------------------------
     rating_model: str = "v1"
     rating_min_samples: int = 20
+    # recency signal halves every N days: A(t) = A0·exp(−kt), k = ln2 / t½
+    rating_decay_half_life_days: float = 14.0
+
+    # Expected value ------------------------------------------------------
+    # EV = P(conversion)·value − cost. P is a prior hypothesis (not observed)
+    # until historical outcomes exist; value/cost are operator placeholders.
+    ev_prior_probability: float = 0.15
+    ev_deal_value: float | None = None
+    ev_cost: float | None = None
 
     # Feature weights -----------------------------------------------------
     weight_web_presence: float = 0.18
@@ -125,8 +134,17 @@ class Settings(BaseSettings):
     @classmethod
     def _model_supported(cls, value: str) -> str:
         value = value.strip().lower()
-        if value not in {"v1", "v2", "v3", "v4"}:
-            raise ValueError(f"unsupported model '{value}' (v1|v2|v3|v4)")
+        allowed = {
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "statistical",
+            "probabilistic",
+            "ml",
+        }
+        if value not in allowed:
+            raise ValueError(f"unsupported model '{value}' ({', '.join(sorted(allowed))})")
         return value
 
     @field_validator("discovery_location")
@@ -189,7 +207,11 @@ class Settings(BaseSettings):
             "website_analysis_timeout_seconds": self.website_analysis_timeout_seconds,
             "rating_model": self.rating_model,
             "rating_min_samples": self.rating_min_samples,
+            "rating_decay_half_life_days": self.rating_decay_half_life_days,
             "feature_weights": self.feature_weights,
+            "ev_prior_probability": self.ev_prior_probability,
+            "ev_deal_value": self.ev_deal_value,
+            "ev_cost": self.ev_cost,
             "verify_interval_hours": self.verify_interval_hours,
             "refresh_interval_hours": self.refresh_interval_hours,
             "notify_webhook_enabled": bool(self.notify_webhook_url),

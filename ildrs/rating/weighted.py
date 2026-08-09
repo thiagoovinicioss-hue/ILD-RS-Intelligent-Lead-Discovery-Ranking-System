@@ -1,51 +1,133 @@
-"""V1 — deterministic weighted scoring.
+"""V1 — the weighted rating engine (mathematical core).
 
-    R = 100 · Σᵢ wᵢ·xᵢ
+Pipeline per feature:
 
-Weights are taken from configuration (normalized to sum 1) and are fully
-transparent. No historical data is required.
+    raw value → normalize → transform → weighted contribution
+
+    R = 100 · Σᵢ wᵢ · zᵢ            zᵢ = transform_i(normalize_i(xᵢ))
+
+Per-feature contributions and the total rating share the same 0–100 scale, so
+each explanation line adds up to the total (e.g. ``Website presence: +18.0``).
+
+Everything is:
+
+- **normalized** per feature type (binary / bounded score / log count /
+  categorical / passthrough / exponential time decay) before summing —
+  incompatible raw values are never added blindly;
+- **transformed** nonlinearly only where justified (see ``transform``);
+- **weighted** by the centralized :class:`RatingConfig` weights;
+- **explained** — every contribution is emitted with a human-readable line
+  and a total, so no rating is ever an unexplained number;
+- **accompanied by confidence** — a separate number describing data coverage,
+  never confused with the rating itself.
+
+Deterministic: identical input (with a fixed clock) yields identical output.
 """
 
 from __future__ import annotations
 
-from ildrs.config import get_settings
+from datetime import UTC, datetime
+from typing import Any
+
 from ildrs.domain.entities import FeatureVector, RatingResult
-from ildrs.rating.base import FitReport, OutcomeSample, scale_to_100
+from ildrs.rating.base import FitReport, OutcomeSample
+from ildrs.rating.confidence import confidence_from_features, confidence_label
+from ildrs.rating.config import RatingConfig, normalize_weights
+from ildrs.rating.ev import ExpectedValue
+from ildrs.rating.explain import build_explanation, explain_feature
+from ildrs.rating.normalize import normalize_feature
+from ildrs.rating.spec import FEATURE_SPECS
+from ildrs.rating.transform import transform_feature
 
-WEIGHT_EPS = 1e-9
+__all__ = ["WeightedRatingModel", "WeightedScoringModel", "normalize_weights"]
 
 
-class WeightedScoringModel:
-    """Deterministic linear rating model (V1)."""
+class WeightedRatingModel:
+    """Deterministic weighted rating engine (V1)."""
 
     name = "v1"
-    version = "v1.0"
+    version = "v1.2"
 
-    def __init__(self, weights: dict[str, float] | None = None) -> None:
-        settings = get_settings()
-        raw = dict(weights) if weights is not None else settings.feature_weights
-        self.weights = normalize_weights(raw)
+    def __init__(
+        self,
+        config: RatingConfig | None = None,
+        weights: dict[str, float] | None = None,
+    ) -> None:
+        if config is not None and weights is not None:
+            raise ValueError("pass either config or weights, not both")
+        if weights is not None:
+            config = RatingConfig(
+                weights=normalize_weights(weights),
+                decay_half_life_days=14.0,
+                transforms={},
+            )
+        self.config = config if config is not None else RatingConfig.from_settings()
 
-    def predict(self, features: FeatureVector) -> RatingResult:
-        breakdown: dict[str, dict] = {}
+    # -- RatingModel interface ------------------------------------------
+
+    def predict(self, features: FeatureVector, *, now: datetime | None = None) -> RatingResult:
+        now = now or datetime.now(UTC)
+        cfg = self.config
+        breakdown: dict[str, dict[str, Any]] = {}
         total = 0.0
-        for key, value in features.features.items():
-            w = self.weights.get(key, 0.0)
-            contribution = value.value * w
+
+        for key in cfg.weights:
+            fv = features.features.get(key)
+            if fv is None:
+                entry = {
+                    "value": 0.0,
+                    "normalized": 0.0,
+                    "transformed": 0.0,
+                    "weight": round(cfg.weights[key], 4),
+                    "contribution": 0.0,
+                    "provenance": "unavailable",
+                    "raw_value": None,
+                    "label": FEATURE_SPECS[key].label if key in FEATURE_SPECS else key,
+                }
+                entry["explanation"] = explain_feature(key, entry)
+                breakdown[key] = entry
+                continue
+
+            u = normalize_feature(key, fv, now=now, half_life_days=cfg.decay_half_life_days)
+            z = transform_feature(key, u)
+            weight = cfg.weights[key]
+            contribution = weight * z * 100.0  # rating points, same scale as total
             total += contribution
-            breakdown[key] = {
-                "value": round(value.value, 4),
-                "weight": round(w, 4),
+
+            entry = {
+                "value": round(u, 4),
+                "normalized": round(u, 4),
+                "transformed": round(z, 4),
+                "weight": round(weight, 4),
                 "contribution": round(contribution, 4),
-                "provenance": value.provenance_kind,
+                "provenance": fv.provenance_kind,
+                "raw_value": _raw_preview(fv.raw_value),
+                "label": FEATURE_SPECS[key].label if key in FEATURE_SPECS else key,
             }
+            entry["explanation"] = explain_feature(key, entry)
+            breakdown[key] = entry
+
+        rating = max(0.0, min(100.0, total))  # total is already in rating points
+        confidence = confidence_from_features(features.features, cfg.weights)
+        ev = ExpectedValue.from_prior(cfg.ev_prior_probability, cfg.ev_deal_value, cfg.ev_cost)
+
         return RatingResult(
-            rating=scale_to_100(total),
-            confidence=0.0,  # filled by the pipeline via validation
+            rating=rating,
+            confidence=confidence,
             model=self.name,
             model_version=self.version,
             breakdown=breakdown,
-            metadata={"method": "deterministic weighted sum"},
+            metadata={
+                "method": "weighted sum after per-feature normalization + transform",
+                "formula": "R = 100 · Σ wᵢ · transform_i(normalize_i(xᵢ))",
+                "confidence": {
+                    "label": confidence_label(confidence),
+                    "basis": "weighted data availability",
+                },
+                "explanations": build_explanation(breakdown, rating),
+                "expected_value": ev.to_dict(),
+                "config": cfg.summary(),
+            },
         )
 
     def fit(self, samples: list[OutcomeSample]) -> FitReport:
@@ -65,14 +147,21 @@ class WeightedScoringModel:
         return {
             "name": self.name,
             "version": self.version,
-            "weights": {k: round(v, 4) for k, v in self.weights.items()},
+            "weights": {k: round(v, 4) for k, v in self.config.weights.items()},
+            "config": self.config.summary(),
         }
 
 
-def normalize_weights(raw: dict[str, float]) -> dict[str, float]:
-    """Normalize weights to sum 1, dropping non-positive or unknown keys."""
-    cleaned = {k: float(v) for k, v in raw.items() if v and v > 0}
-    total = sum(cleaned.values())
-    if total <= WEIGHT_EPS:
-        raise ValueError("feature weights must be positive and sum to > 0")
-    return {k: v / total for k, v in cleaned.items()}
+# Backward-compatible alias (previous V1 class name).
+WeightedScoringModel = WeightedRatingModel
+
+
+def _raw_preview(raw: Any) -> Any:
+    """Compact, JSON-safe preview of a raw value for the breakdown."""
+    if raw is None or isinstance(raw, (str, int, float, bool)):
+        return raw if not isinstance(raw, str) else raw[:120]
+    if isinstance(raw, dict):
+        return f"<dict:{len(raw)} keys>"
+    if isinstance(raw, (list, tuple)):
+        return f"<{type(raw).__name__}:{len(raw)} items>"
+    return str(raw)[:120]

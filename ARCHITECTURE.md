@@ -77,14 +77,52 @@ Stages are implemented in `pipeline/stages.py` and orchestrated by
 
 | Version | Name                    | Status in this codebase                     |
 | ------- | ----------------------- | ------------------------------------------- |
-| V1      | Deterministic weighted  | Implemented — `R = Σ wᵢ·xᵢ`, configurable weights |
+| V1      | Deterministic weighted  | Implemented — `WeightedRatingModel`, the mathematical core (normalize → transform → weighted sum → explain + confidence) |
 | V2      | Statistically calibrated| Implemented — weights calibrated from historical outcomes via point-biserial correlation (requires ≥ minimum sample) |
-| V3      | Response/conversion probability | Interface defined; returns "not available without calibrated data" until a calibration dataset exists |
-| V4      | Adaptive/learned ranking | Interface defined; placeholder (`NotImplemented`) |
+| V3      | Response/conversion probability | Interface defined — `FutureProbabilisticModel`; not implemented |
+| V4      | Adaptive/learned ranking | Interface defined — `FutureMLModel`; not implemented |
+
+The future seams are explicit: `FutureStatisticalModel`, `FutureProbabilisticModel`,
+and `FutureMLModel` all implement `RatingModel` but deliberately raise
+`ModelNotImplemented`. The system never fakes ML.
 
 All models implement the `RatingModel` interface so the engine does not know
 which variant it runs. This is the seam where real ML can be added later
 without touching the pipeline.
+
+#### V1 mathematical core
+
+Per feature: `raw → normalize → transform → weighted contribution`, summed to
+the rating:
+
+```
+R = 100 · Σᵢ wᵢ · zᵢ          zᵢ = transform_i(normalize_i(xᵢ))
+```
+
+- **Normalization** is type-aware (`ildrs/rating/normalize.py`): binary →
+  {0,1}, bounded provider scores → [0,1], counts → log10 saturation, status →
+  documented categorical table, derived scores → passthrough, recency → time
+  decay. Incompatible raw values are never summed blindly.
+- **Time decay** (`ildrs/rating/decay.py`): `A(t) = A0·exp(−k·t)`, with
+  `k = ln2 / t½` from a configurable half-life (`ILD_RATING_DECAY_HALF_LIFE_DAYS`).
+- **Nonlinear transforms** (`ildrs/rating/transform.py`) are opt-in and
+  justified: e.g. business status uses `z = u²` so a closed business (0.2)
+  collapses to 0.04 while OPERATIONAL (1.0) is unchanged.
+- **Explanations** (`ildrs/rating/explain.py`) are mandatory: every lead shows
+  additive contribution lines in rating points plus a total, e.g.
+  `Website presence: +18.0`, `Recent activity: +1.7`, `Total rating: 61.6 / 100`.
+- **Confidence** (`ildrs/rating/confidence.py`) is separate from the rating:
+  the weighted share of features with real data. High rating + low confidence
+  is valid when only few high-weight features were observed.
+- **Expected value** (`ildrs/rating/ev.py`): `EV = P(conversion)·value − cost`
+  is reserved for later; V1 only emits `estimated` (configured prior) or
+  `unknown`, never a fabricated `observed` probability.
+- **Config** is centralized (`ildrs/rating/config.py`): weights, decay,
+  transforms, and EV assumptions are documented hypotheses — not scattered
+  constants.
+
+All of it is deterministic: identical input with a fixed clock produces
+byte-identical output (covered by tests).
 
 ---
 
@@ -123,11 +161,20 @@ ILD&RS/
 │   │   └── validator.py       # checks + confidence
 │   ├── rating/
 │   │   ├── __init__.py
-│   │   ├── base.py            # RatingModel protocol, RatingResult
-│   │   ├── weighted.py        # V1
-│   │   ├── calibrated.py      # V2
-│   │   ├── probabilistic.py   # V3 (stub)
-│   │   ├── adaptive.py        # V4 (stub)
+│   │   ├── base.py            # RatingModel protocol, RatingResult, errors
+│   │   ├── config.py          # centralized RatingConfig (weights/decay/transforms/EV)
+│   │   ├── spec.py            # per-feature normalization/transform specs
+│   │   ├── normalize.py       # type-aware normalization to [0,1]
+│   │   ├── transform.py       # identity + justified nonlinear transforms
+│   │   ├── decay.py           # exponential time decay A(t)=A0·exp(−kt)
+│   │   ├── confidence.py      # weighted data-availability confidence
+│   │   ├── explain.py         # per-lead contribution explanations
+│   │   ├── ev.py              # expected value (estimated/unknown/observed)
+│   │   ├── weighted.py        # V1 — WeightedRatingModel engine
+│   │   ├── calibrated.py      # V2 — statistically calibrated weights
+│   │   ├── probabilistic.py   # legacy V3 stub (superseded by future.py)
+│   │   ├── adaptive.py        # legacy V4 stub (superseded by future.py)
+│   │   ├── future.py          # FutureStatistical/Probabilistic/ML interfaces
 │   │   └── registry.py        # model factory by name
 │   ├── ranking/
 │   │   ├── __init__.py
@@ -182,6 +229,7 @@ ILD&RS/
     ├── test_sources.py
     ├── test_features.py
     ├── test_rating.py
+    ├── test_rating_engine.py
     ├── test_ranking.py
     ├── test_pipeline.py
     ├── test_scheduler.py

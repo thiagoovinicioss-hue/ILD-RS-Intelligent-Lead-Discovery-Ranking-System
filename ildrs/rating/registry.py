@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from ildrs.rating.adaptive import AdaptiveRankingModel
 from ildrs.rating.base import RatingModel
 from ildrs.rating.calibrated import CalibratedWeightsModel
-from ildrs.rating.probabilistic import ProbabilisticModel
-from ildrs.rating.weighted import WeightedScoringModel
+from ildrs.rating.future import (
+    FutureMLModel,
+    FutureProbabilisticModel,
+    FutureStatisticalModel,
+)
+from ildrs.rating.weighted import WeightedRatingModel
 
 _VARIANTS = {
-    "v1": WeightedScoringModel,
+    "v1": WeightedRatingModel,
     "v2": CalibratedWeightsModel,
-    "v3": ProbabilisticModel,
-    "v4": AdaptiveRankingModel,
+    "v3": FutureProbabilisticModel,
+    "v4": FutureMLModel,
+    "statistical": FutureStatisticalModel,
+    "probabilistic": FutureProbabilisticModel,
+    "ml": FutureMLModel,
 }
 
 

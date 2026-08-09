@@ -149,13 +149,42 @@ which variant is configured (`ILD_RATING_MODEL`).
 
 | Version | Name                     | Status                                                          |
 | ------- | ------------------------ | --------------------------------------------------------------- |
-| V1      | Deterministic weighted   | `R = 100 · Σ wᵢ·xᵢ`, configurable, normalized weights           |
+| V1      | Deterministic weighted   | Implemented — `WeightedRatingModel` mathematical core           |
 | V2      | Statistically calibrated | Weights fit from historical outcomes (point-biserial correlation) |
-| V3      | Response probability     | Interface defined; reports unavailable until calibration data exists |
-| V4      | Adaptive / learned       | Interface defined; placeholder                                   |
+| V3      | Response probability     | Interface defined (`FutureProbabilisticModel`); not implemented |
+| V4      | Adaptive / learned       | Interface defined (`FutureMLModel`); not implemented            |
 
-Lead confidence is data-availability: the share of *weighted* features whose
-provenance is `direct`/`derived`/`inferred` (never `unavailable`).
+### The V1 mathematical core
+
+Each feature flows through `raw → normalize → transform → weighted contribution`,
+summed into the rating:
+
+```
+R = 100 · Σ wᵢ · zᵢ        zᵢ = transform_i(normalize_i(xᵢ))
+```
+
+- **Type-aware normalization** — binary → `{0,1}`, bounded provider scores →
+  `[0,1]`, review counts → log10 saturation, status → documented table, derived
+  scores → passthrough, recency → decay. Incompatible raw values are never
+  summed blindly.
+- **Exponential time decay** — `A(t) = A0·exp(−k·t)` with `k = ln2/t½` from a
+  configurable half-life (`ILD_RATING_DECAY_HALF_LIFE_DAYS`).
+- **Justified nonlinear transforms** — e.g. business status uses `z = u²`
+  (a closed business counts for 0.04, not 0.2).
+- **Mandatory explanations** — every lead shows additive contribution lines and
+  a total, e.g. `Website presence: +18.0`, `Recent activity: +1.7`,
+  `Total rating: 61.6 / 100`. No rating is ever an unexplained number.
+- **Confidence ≠ rating** — confidence is the weighted share of features with
+  real data. A lead can have a high rating and low confidence.
+- **Expected value (reserved)** — `EV = P(conversion)·value − cost`; V1 only
+  emits `estimated` (configured prior) or `unknown`, never a fake `observed`.
+- **Centralized config** — weights/decay/transforms/EV live in
+  `ildrs/rating/config.py` and are documented hypotheses, not scattered
+  constants.
+- **Deterministic** — identical input (fixed clock) gives identical output
+  (tested).
+
+All of it lives in `ildrs/rating/` — a standalone layer with no UI dependency.
 
 ---
 
@@ -170,7 +199,10 @@ See [`.env.example`](.env.example) for the full, documented list. Key variables:
 | `ILD_GOOGLE_PLACES_API_KEY` | *(empty)*                        | Google Places API key (never committed) |
 | `ILD_DISCOVERY_QUERY`       | `plumbing services`              | Default search text                   |
 | `ILD_DISCOVERY_LOCATION`    | *(empty)* `"lat,lng"`            | Center point for discovery/ranking    |
-| `ILD_RATING_MODEL`          | `v1`                             | `v1` / `v2` / `v3` / `v4`             |
+| `ILD_RATING_MODEL`          | `v1`                             | `v1` / `v2` / `v3` / `v4` / `statistical` / `probabilistic` / `ml` |
+| `ILD_RATING_DECAY_HALF_LIFE_DAYS` | `14`                     | Recency half-life: `A(t)=A0·exp(−kt)`, `k=ln2/t½` |
+| `ILD_EV_PRIOR_PROBABILITY`  | `0.15`                           | Prior P(conversion) hypothesis (estimated EV) |
+| `ILD_EV_DEAL_VALUE` / `ILD_EV_COST` | *(empty)*               | Deal value / outreach cost — enable EV reporting |
 | `ILD_WEIGHT_<FEATURE>`      | see `.env.example`               | Per-feature weights (normalized to 1) |
 | `ILD_VERIFY_INTERVAL_HOURS` | `24`                             | Periodic verification cadence         |
 | `ILD_REFRESH_INTERVAL_HOURS`| `6`                              | Periodic re-rating/ranking cadence    |
@@ -207,7 +239,7 @@ ILD&RS/
 │   ├── sources/            # replaceable provider adapters
 │   ├── normalization/      # name/phone/coords normalizers
 │   ├── features/           # definitions, extractor, validator
-│   ├── rating/             # V1–V4 models + registry
+│   ├── rating/             # math core: normalize/transform/decay/confidence/explain/EV + models
 │   ├── ranking/            # deterministic ranking engine
 │   ├── pipeline/           # stages + orchestrator
 │   ├── jobs/               # async scheduler + periodic jobs
