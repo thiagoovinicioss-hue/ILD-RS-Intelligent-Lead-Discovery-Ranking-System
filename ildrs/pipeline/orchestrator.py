@@ -37,7 +37,7 @@ class Orchestrator:
         self.source = source
         self.notifier = notifier
 
-    async def run_stage(self, stage: str, *, cancel: asyncio.Event | None = None) -> dict:
+    async def run_stage(self, stage: str, *, cancel: asyncio.Event | None = None, **kwargs) -> dict:
         """Run one stage with full job tracking. Raises on failure."""
         if stage not in STAGE_NAMES:
             raise ValueError(f"unknown stage '{stage}'; use {list(STAGE_NAMES)}")
@@ -51,12 +51,10 @@ class Orchestrator:
 
         logger.info("stage '%s' starting (job=%s)", stage, job_id)
         try:
-            if stage in ("discover", "verify"):
-                counts = await func(self.db, self.source, self.notifier, cancel=cancel)
-            elif stage in ("collect",):
-                counts = await func(self.db, self.source, self.notifier, cancel=cancel)
+            if stage in ("discover", "verify", "collect"):
+                counts = await func(self.db, self.source, self.notifier, cancel=cancel, **kwargs)
             else:
-                counts = await func(self.db, self.notifier, cancel=cancel)
+                counts = await func(self.db, self.notifier, cancel=cancel, **kwargs)
 
             async with self.db.session() as session:
                 await finish_job(session, job_id=job_id, status="completed", counts=counts)
@@ -79,10 +77,12 @@ class Orchestrator:
             await self.notifier.send("error", f"Stage {stage} failed", str(exc))
             raise
 
-    async def run_stage_guarded(self, stage: str, *, cancel: asyncio.Event | None = None) -> dict:
+    async def run_stage_guarded(
+        self, stage: str, *, cancel: asyncio.Event | None = None, **kwargs
+    ) -> dict:
         """Run a stage without raising — used by the scheduler/API for background work."""
         try:
-            return await self.run_stage(stage, cancel=cancel)
+            return await self.run_stage(stage, cancel=cancel, **kwargs)
         except Exception as exc:  # noqa: BLE001
             logger.exception("guarded stage '%s' failed", stage)
             return {"stage": stage, "status": "failed", "error": str(exc)}

@@ -49,6 +49,12 @@ class BusinessRow(Base):
     collected: Mapped[bool] = mapped_column(Boolean, default=False)
     features: Mapped[dict] = mapped_column(JSONType, default=dict)
     provenance: Mapped[dict] = mapped_column(JSONType, default=dict)
+    website_analysis: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    social_links: Mapped[list] = mapped_column(JSONType, default=list)
+    recent_activity: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
+    duplicate_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    deduped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_verified_at: Mapped[datetime | None] = mapped_column(
@@ -60,6 +66,7 @@ class BusinessRow(Base):
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_business_source_external"),
         Index("ix_businesses_source_status", "source"),
+        Index("ix_businesses_duplicate", "is_duplicate"),
     )
 
 

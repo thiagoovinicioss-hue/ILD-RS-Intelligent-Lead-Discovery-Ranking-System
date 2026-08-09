@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ildrs import __version__
 from ildrs.api.context import AppContext
-from ildrs.api.routes import businesses, jobs, leads, outreach, system
+from ildrs.api.routes import businesses, discovery, jobs, leads, outreach, system
 from ildrs.api.routes import config as config_route
 from ildrs.config import get_settings
 from ildrs.jobs.definitions import register_periodic_jobs
@@ -89,6 +89,7 @@ def create_app() -> FastAPI:
 
     app.include_router(system.router)
     app.include_router(businesses.router)
+    app.include_router(discovery.router)
     app.include_router(leads.router)
     app.include_router(jobs.router)
     app.include_router(outreach.router)

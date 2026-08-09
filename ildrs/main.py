@@ -128,9 +128,28 @@ class GracefulServer(uvicorn.Server):
 
 
 @app.command()
-def discover(limit: int | None = typer.Option(None, help="Override ILD_DISCOVERY_LIMIT")) -> None:
+def discover(
+    limit: int | None = typer.Option(None, help="Override ILD_DISCOVERY_LIMIT"),
+    query: str | None = typer.Option(None, help="Search query (overrides ILD_DISCOVERY_QUERY)"),
+    category: str | None = typer.Option(
+        None, help="Category filter (overrides ILD_DISCOVERY_CATEGORIES, first token)"
+    ),
+    location: str | None = typer.Option(
+        None, help="City/place to search (overrides ILD_DISCOVERY_LOCATION)"
+    ),
+    no_dedupe: bool = typer.Option(
+        False, "--no-dedupe", help="Skip duplicate filtering against existing businesses"
+    ),
+) -> None:
     """Discover candidates from the configured source."""
-    _run_single_stage("discover", limit=limit)
+    _run_single_stage(
+        "discover",
+        limit=limit,
+        query=query,
+        category=category,
+        location=location,
+        dedupe=not no_dedupe,
+    )
 
 
 @app.command()
@@ -163,7 +182,122 @@ def verify() -> None:
     _run_single_stage("verify")
 
 
-def _run_single_stage(stage: str, *, limit: int | None = None) -> None:
+@app.command()
+def dedup(
+    limit: int = typer.Option(100000, help="Max businesses to scan"),
+) -> None:
+    """Detect and flag duplicate businesses across the database.
+
+    Conservative matching: identical normalized phone, or identical website
+    domain with the same name, or identical normalized name + category.
+    Non-canonical members are flagged with ``is_duplicate`` and linked to
+    the canonical business.
+    """
+    from ildrs.normalization.deduplicator import summarize
+    from ildrs.storage.repositories import (
+        business_to_domain,
+        clear_duplicate_flags,
+        list_businesses,
+        mark_duplicates,
+    )
+
+    async def main() -> dict:
+        db = Database()
+        db.connect()
+        await init_schema(db)
+        try:
+            async with db.session() as session:
+                rows = await list_businesses(session, limit=limit)
+                businesses = [business_to_domain(r) for r in rows]
+                clusters, duplicate_count = summarize(businesses, (r.id for r in rows))
+                mapping = {
+                    member_id: cluster.canonical_id
+                    for cluster in clusters
+                    for member_id in cluster.duplicate_ids
+                }
+                async with db.session() as session:
+                    cleared = await clear_duplicate_flags(session)
+                    marked = await mark_duplicates(session, mapping)
+                    await session.commit()
+            return {
+                "scanned": len(rows),
+                "clusters": len(clusters),
+                "duplicates": duplicate_count,
+                "flags_cleared": cleared,
+                "flags_set": marked,
+            }
+        finally:
+            await db.close()
+
+    result = asyncio.run(main())
+    typer.echo(
+        f"✓ dedup: scanned={result['scanned']} clusters={result['clusters']} "
+        f"duplicates={result['duplicates']} (flags {result['flags_cleared']}→{result['flags_set']})"
+    )
+
+
+@app.command()
+def enrich_websites(
+    limit: int = typer.Option(200, help="Max businesses to analyze"),
+) -> None:
+    """Fetch and analyze business websites (requires ILD_ENABLE_WEBSITE_ANALYSIS=true)."""
+    from ildrs.pipeline.stages import _enrich_website
+    from ildrs.storage.repositories import (
+        business_to_domain,
+        get_business,
+        list_businesses,
+        upsert_business,
+    )
+
+    settings = get_settings()
+    if not settings.enable_website_analysis:
+        typer.echo("website analysis is disabled (set ILD_ENABLE_WEBSITE_ANALYSIS=true)", err=True)
+        sys.exit(1)
+
+    async def main() -> dict:
+        db = Database()
+        db.connect()
+        await init_schema(db)
+        try:
+            analyzed = 0
+            errors = 0
+            async with db.session() as session:
+                rows = await list_businesses(session, limit=limit)
+                ids = [r.id for r in rows]
+            for business_id in ids:
+                try:
+                    async with db.session() as session:
+                        row = await get_business(session, business_id)
+                        if row is None:
+                            continue
+                        business = business_to_domain(row)
+                    if not business.website:
+                        continue
+                    await _enrich_website(business)
+                    async with db.session() as session:
+                        await upsert_business(session, business)
+                        await session.commit()
+                    analyzed += 1
+                except Exception as exc:  # noqa: BLE001
+                    errors += 1
+                    typer.echo(f"  ! {business_id}: {exc}", err=True)
+            return {"analyzed": analyzed, "errors": errors}
+        finally:
+            await db.close()
+
+    result = asyncio.run(main())
+    typer.echo(f"✓ website enrichment: analyzed={result['analyzed']} errors={result['errors']}")
+
+
+def _run_single_stage(
+    stage: str,
+    *,
+    limit: int | None = None,
+    query: str | None = None,
+    category: str | None = None,
+    location: str | None = None,
+    dedupe: bool = True,
+) -> None:
     settings = get_settings()
 
     async def main() -> dict:
@@ -173,7 +307,11 @@ def _run_single_stage(stage: str, *, limit: int | None = None) -> None:
         try:
             notifier = Notifier(db)
             orchestrator = Orchestrator(db, create_source(settings.source), notifier)
-            return await orchestrator.run_stage_guarded(stage, cancel=asyncio.Event())
+            kwargs: dict = {}
+            if stage == "discover":
+                discovery_query = _build_discovery_query(settings, limit, query, category, location)
+                kwargs = {"query": discovery_query, "dedupe": dedupe}
+            return await orchestrator.run_stage_guarded(stage, **kwargs)
         finally:
             await db.close()
 
@@ -184,6 +322,48 @@ def _run_single_stage(stage: str, *, limit: int | None = None) -> None:
     counts = result.get("counts", {})
     summary = ", ".join(f"{k}={v}" for k, v in counts.items()) or "done"
     typer.echo(f"✓ {stage}: {summary}")
+
+
+def _build_discovery_query(
+    settings: Any,
+    limit: int | None,
+    query: str | None,
+    category: str | None,
+    location: str | None,
+):
+    from ildrs.geocoding import geocode_place
+    from ildrs.sources.base import DiscoveryQuery
+
+    lat, lng = settings.discovery_location_coords or (None, None)
+    location_label = location or settings.discovery_location
+    if location_label:
+        coords = geocode_place(location_label)
+        if coords is not None:
+            lat, lng = coords
+        else:
+            typer.echo(
+                f"warning: could not geocode '{location_label}'; using discovery coords", err=True
+            )
+
+    categories = settings.discovery_categories.split(",") if settings.discovery_categories else []
+    chosen_category = category or (categories[0] if categories else "")
+    if category and category not in categories:
+        categories.append(category)
+    if category:
+        categories = [category]
+
+    return DiscoveryQuery(
+        query=query or settings.discovery_query,
+        category=chosen_category,
+        keywords=categories,
+        language=settings.google_places_language,
+        region=settings.google_places_region,
+        latitude=lat,
+        longitude=lng,
+        radius_m=settings.discovery_radius_m,
+        limit=limit or settings.discovery_limit,
+        page_size=min(20, limit or settings.discovery_limit),
+    )
 
 
 # --------------------------------------------------------------------------

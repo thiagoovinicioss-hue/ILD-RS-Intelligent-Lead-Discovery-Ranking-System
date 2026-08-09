@@ -24,6 +24,7 @@ from ildrs.sources.base import BusinessSource, DiscoveryQuery
 from ildrs.storage.database import Database
 from ildrs.storage.repositories import (
     businesses_with_features,
+    find_duplicate_candidate,
     get_business,
     list_businesses,
     set_business_collected,
@@ -55,24 +56,28 @@ async def discover_stage(
     source: BusinessSource,
     notifier: Notifier,
     *,
+    query: DiscoveryQuery | None = None,
     limit: int | None = None,
+    dedupe: bool = True,
     cancel: asyncio.Event | None = None,
 ) -> dict[str, int]:
     settings = get_settings()
-    lat, lng = settings.discovery_location_coords or (None, None)
-    query = DiscoveryQuery(
-        query=settings.discovery_query,
-        latitude=lat,
-        longitude=lng,
-        radius_m=settings.discovery_radius_m,
-        limit=limit or settings.discovery_limit,
-    )
+    if query is None:
+        lat, lng = settings.discovery_location_coords or (None, None)
+        query = DiscoveryQuery(
+            query=settings.discovery_query,
+            latitude=lat,
+            longitude=lng,
+            radius_m=settings.discovery_radius_m,
+            limit=limit or settings.discovery_limit,
+        )
     await check_cancel(cancel)
     logger.info("discovering businesses with source '%s' (query=%r)", source.name, query.query)
     candidates = await source.discover(query)
     logger.info("source returned %d candidate(s)", len(candidates))
 
     discovered = 0
+    duplicates_skipped = 0
     async with db.session() as session:
         for i, candidate in enumerate(candidates):
             await check_cancel(cancel)
@@ -86,6 +91,11 @@ async def discover_stage(
                 category=candidate.category,
                 subcategories=list(candidate.subcategories),
             )
+            if dedupe:
+                existing = await find_duplicate_candidate(session, business)
+                if existing is not None:
+                    duplicates_skipped += 1
+                    continue
             await upsert_business(session, business)
             discovered += 1
             if (i + 1) % 25 == 0:
@@ -94,9 +104,10 @@ async def discover_stage(
     await notifier.send(
         "info",
         "Discovery complete",
-        f"{discovered} business(es) found via {source.name}.",
+        f"{discovered} business(es) found via {source.name} "
+        f"({duplicates_skipped} duplicate(s) skipped).",
     )
-    return {"discovered": discovered}
+    return {"discovered": discovered, "duplicates_skipped": duplicates_skipped}
 
 
 async def collect_stage(
@@ -114,6 +125,7 @@ async def collect_stage(
 
     collected = 0
     errors = 0
+    analyzed_websites = 0
     for business_id in ids:
         await check_cancel(cancel)
         try:
@@ -132,6 +144,9 @@ async def collect_stage(
                     subcategories=list(row.subcategories or []),
                 )
             business = await source.collect_details(candidate)
+            await _enrich_website(business)
+            if business.website_analysis is not None:
+                analyzed_websites += 1
             async with db.session() as session:
                 await upsert_business(session, business)
                 await set_business_collected(session, business_id)
@@ -144,9 +159,26 @@ async def collect_stage(
     await notifier.send(
         "info" if errors == 0 else "warning",
         "Collection complete",
-        f"Collected details for {collected} business(es); {errors} error(s).",
+        f"Collected details for {collected} business(es); {errors} error(s); "
+        f"analyzed {analyzed_websites} website(s).",
     )
-    return {"collected": collected, "errors": errors}
+    return {"collected": collected, "errors": errors, "websites_analyzed": analyzed_websites}
+
+
+async def _enrich_website(business: Business) -> None:
+    """Optionally analyze the business website (conservative, opt-in)."""
+    settings = get_settings()
+    if not settings.enable_website_analysis:
+        return
+    if not business.website:
+        return
+    from dataclasses import asdict
+
+    from ildrs.analysis.website import analyze_website
+
+    analysis = await analyze_website(business.website)
+    business.website_analysis = asdict(analysis)
+    business.social_links = analysis.social_links_compact()
 
 
 # --------------------------------------------------------------------------
@@ -391,6 +423,9 @@ def _business_from_row(row) -> Business:
         google_rating=row.google_rating,
         review_count=row.review_count,
         business_status=row.business_status,
+        website_analysis=row.website_analysis,
+        social_links=list(row.social_links or []),
+        recent_activity=row.recent_activity,
         created_at=row.created_at,
         updated_at=row.updated_at,
         last_verified_at=row.last_verified_at,

@@ -22,16 +22,26 @@ FEATURE_KEYS = (
     "contact_availability",
     "category_fit",
     "location_fit",
+    "website_quality",
+    "business_completeness",
+    "recent_activity",
+    "social_presence",
+    "social_activity",
 )
 
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "web_presence": 0.20,
-    "rating_score": 0.15,
-    "review_volume": 0.15,
-    "business_status": 0.10,
-    "contact_availability": 0.15,
-    "category_fit": 0.15,
-    "location_fit": 0.10,
+    "web_presence": 0.18,
+    "rating_score": 0.13,
+    "review_volume": 0.13,
+    "business_status": 0.08,
+    "contact_availability": 0.13,
+    "category_fit": 0.13,
+    "location_fit": 0.08,
+    "website_quality": 0.05,
+    "business_completeness": 0.05,
+    "recent_activity": 0.02,
+    "social_presence": 0.01,
+    "social_activity": 0.01,
 }
 
 
@@ -52,6 +62,17 @@ class Settings(BaseSettings):
     google_places_region: str = ""
     google_places_language: str = ""
 
+    # Search quality (Google Places) --------------------------------------
+    google_places_timeout_seconds: float = 15.0
+    google_places_retries: int = 3
+    google_places_backoff_base_ms: int = 400
+    google_places_min_interval_ms: int = 200
+    google_places_cache_ttl_seconds: int = 3600
+
+    # Website analysis (conservative, opt-in) -----------------------------
+    enable_website_analysis: bool = False
+    website_analysis_timeout_seconds: float = 5.0
+
     # Discovery -----------------------------------------------------------
     discovery_query: str = "plumbing services"
     discovery_location: str = ""
@@ -64,13 +85,18 @@ class Settings(BaseSettings):
     rating_min_samples: int = 20
 
     # Feature weights -----------------------------------------------------
-    weight_web_presence: float = 0.20
-    weight_rating_score: float = 0.15
-    weight_review_volume: float = 0.15
-    weight_business_status: float = 0.10
-    weight_contact_avail: float = 0.15
-    weight_category_fit: float = 0.15
-    weight_location_fit: float = 0.10
+    weight_web_presence: float = 0.18
+    weight_rating_score: float = 0.13
+    weight_review_volume: float = 0.13
+    weight_business_status: float = 0.08
+    weight_contact_avail: float = 0.13
+    weight_category_fit: float = 0.13
+    weight_location_fit: float = 0.08
+    weight_website_quality: float = 0.05
+    weight_business_completeness: float = 0.05
+    weight_recent_activity: float = 0.02
+    weight_social_presence: float = 0.01
+    weight_social_activity: float = 0.01
 
     # Scheduling ----------------------------------------------------------
     verify_interval_hours: float = 24.0
@@ -124,6 +150,11 @@ class Settings(BaseSettings):
             "contact_availability": self.weight_contact_avail,
             "category_fit": self.weight_category_fit,
             "location_fit": self.weight_location_fit,
+            "website_quality": self.weight_website_quality,
+            "business_completeness": self.weight_business_completeness,
+            "recent_activity": self.weight_recent_activity,
+            "social_presence": self.weight_social_presence,
+            "social_activity": self.weight_social_activity,
         }
         return {k: mapping[k] for k in FEATURE_KEYS}
 
@@ -151,6 +182,11 @@ class Settings(BaseSettings):
             "discovery_radius_m": self.discovery_radius_m,
             "discovery_limit": self.discovery_limit,
             "discovery_categories": self.target_categories,
+            "google_places_timeout_seconds": self.google_places_timeout_seconds,
+            "google_places_retries": self.google_places_retries,
+            "google_places_cache_ttl_seconds": self.google_places_cache_ttl_seconds,
+            "enable_website_analysis": self.enable_website_analysis,
+            "website_analysis_timeout_seconds": self.website_analysis_timeout_seconds,
             "rating_model": self.rating_model,
             "rating_min_samples": self.rating_min_samples,
             "feature_weights": self.feature_weights,

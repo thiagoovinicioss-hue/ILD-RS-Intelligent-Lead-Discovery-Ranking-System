@@ -26,6 +26,11 @@ def test_all_features_documented():
         "contact_availability",
         "category_fit",
         "location_fit",
+        "website_quality",
+        "business_completeness",
+        "recent_activity",
+        "social_presence",
+        "social_activity",
     }
     assert set(FEATURE_DEFINITIONS) == expected
 
@@ -112,6 +117,80 @@ def test_haversine_known_distance():
     # Austin → Dallas ≈ 293 km
     distance = haversine_km(30.2672, -97.7431, 32.7767, -96.7970)
     assert 285 < distance < 310
+
+
+def test_extract_website_quality_requires_fetched_content():
+    extractor = FeatureExtractor()
+    plain = make_business(has_website=True)
+    assert extractor.extract(plain).features["website_quality"].value == 0.0  # not analyzed
+
+    good = make_business(has_website=True)
+    good.website_analysis = {
+        "fetched": True,
+        "error": None,
+        "title": "Apex Plumbing",
+        "meta_description": "desc",
+        "word_count": 400,
+        "has_ssl": True,
+    }
+    assert extractor.extract(good).features["website_quality"].value == pytest.approx(1.0)
+
+    broken = make_business(has_website=True)
+    broken.website_analysis = {"fetched": False, "error": "timeout", "title": "", "word_count": 0}
+    assert extractor.extract(broken).features["website_quality"].value == pytest.approx(0.1)
+
+
+def test_extract_business_completeness():
+    extractor = FeatureExtractor()
+    full = make_business(email="a@b.co")
+    full_completeness = extractor.extract(full).features["business_completeness"]
+    assert full_completeness.value == pytest.approx(7 / 8)  # address is empty
+
+    sparse = make_business(
+        name="", category="", has_website=False, has_phone=False, rating=None, reviews=0, status=""
+    )
+    sparse_completeness = extractor.extract(sparse).features["business_completeness"]
+    assert sparse_completeness.value == pytest.approx(0.0)
+    assert sparse_completeness.provenance_kind == "unavailable"
+
+
+def test_extract_recent_activity_decays():
+    from datetime import UTC, datetime, timedelta
+
+    extractor = FeatureExtractor()
+    fresh = make_business()
+    fresh.recent_activity = datetime.now(UTC) - timedelta(days=1)
+    assert extractor.extract(fresh).features["recent_activity"].value == pytest.approx(
+        1.0 - 1 / 30, abs=0.05
+    )
+
+    stale = make_business()
+    stale.recent_activity = datetime.now(UTC) - timedelta(days=120)
+    stale_value = extractor.extract(stale).features["recent_activity"].value
+    assert stale_value == pytest.approx(0.0, abs=0.05)
+
+    none = make_business()
+    none.recent_activity = None
+    assert extractor.extract(none).features["recent_activity"].value == 0.0
+    assert extractor.extract(none).features["recent_activity"].provenance_kind == "unavailable"
+
+
+def test_extract_social_presence_and_activity():
+    extractor = FeatureExtractor()
+    none = make_business()
+    assert extractor.extract(none).features["social_presence"].value == 0.0
+
+    active = make_business()
+    active.social_links = ["https://www.facebook.com/apexplumbing"]
+    assert extractor.extract(active).features["social_presence"].value == 1.0
+    assert extractor.extract(active).features["social_activity"].value > 0.0
+
+    dormant = make_business()
+    dormant.social_links = ["https://www.facebook.com/apexplumbing"]
+    dormant.website_analysis = {"latest_post_at": "2019-01-01"}
+    assert extractor.extract(dormant).features["social_activity"].value == pytest.approx(
+        0.0, abs=0.05
+    )
 
 
 def test_validator_reports_availability_and_validity():

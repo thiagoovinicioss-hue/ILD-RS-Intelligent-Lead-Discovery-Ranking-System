@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,6 +49,9 @@ def business_to_domain(row: BusinessRow) -> Business:
         google_rating=row.google_rating,
         review_count=row.review_count,
         business_status=row.business_status,
+        website_analysis=row.website_analysis,
+        social_links=list(row.social_links or []),
+        recent_activity=row.recent_activity,
         created_at=row.created_at,
         updated_at=row.updated_at,
         last_verified_at=row.last_verified_at,
@@ -76,6 +79,12 @@ def business_serialize(row: BusinessRow) -> dict:
         "collected": row.collected,
         "features": row.features,
         "provenance": row.provenance,
+        "website_analysis": row.website_analysis,
+        "social_links": row.social_links,
+        "recent_activity": row.recent_activity.isoformat() if row.recent_activity else None,
+        "is_duplicate": row.is_duplicate,
+        "duplicate_of": row.duplicate_of,
+        "deduped_at": row.deduped_at.isoformat() if row.deduped_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "last_verified_at": row.last_verified_at.isoformat() if row.last_verified_at else None,
@@ -98,6 +107,9 @@ def business_from_domain(b: Business) -> BusinessRow:
         google_rating=b.google_rating,
         review_count=b.review_count,
         business_status=b.business_status,
+        website_analysis=b.website_analysis,
+        social_links=b.social_links,
+        recent_activity=b.recent_activity,
         provenance=b.provenance.to_dict(),
         created_at=b.created_at,
         updated_at=b.updated_at,
@@ -119,6 +131,12 @@ def update_business_row(row: BusinessRow, b: Business) -> None:
     row.google_rating = b.google_rating
     row.review_count = b.review_count
     row.business_status = b.business_status
+    if b.website_analysis is not None:
+        row.website_analysis = b.website_analysis
+    if b.social_links:
+        row.social_links = b.social_links
+    if b.recent_activity is not None:
+        row.recent_activity = b.recent_activity
     row.provenance = b.provenance.to_dict()
     row.updated_at = utcnow()
 
@@ -147,6 +165,35 @@ async def upsert_business(session: AsyncSession, b: Business) -> BusinessRow:
 
 async def get_business(session: AsyncSession, business_id: str) -> BusinessRow | None:
     return await session.get(BusinessRow, business_id)
+
+
+async def find_duplicate_candidate(session: AsyncSession, b: Business) -> BusinessRow | None:
+    """Return an existing business that matches ``b`` by phone/domain/name.
+
+    Used during discovery to avoid inserting candidates that already exist
+    under a different external_id. Conservative — only high-precision matches
+    count (see ``ildrs.normalization.deduplicator``).
+    """
+    from ildrs.normalization.deduplicator import duplicate_pair
+    from ildrs.normalization.normalizers import normalize_name, normalize_phone, website_domain
+
+    phone = normalize_phone(b.phone)
+    domain = website_domain(b.website)
+    name = normalize_name(b.name)
+    conditions = []
+    if phone:
+        conditions.append(BusinessRow.phone == phone)
+    if domain:
+        conditions.append(BusinessRow.website.like(f"%{domain}%"))
+    if name:
+        conditions.append(func.lower(BusinessRow.name) == name)
+    if not conditions:
+        return None
+    result = await session.execute(select(BusinessRow).where(or_(*conditions)))
+    for row in result.scalars().all():
+        if duplicate_pair(b, row):
+            return row
+    return None
 
 
 async def list_businesses(
@@ -222,6 +269,42 @@ async def businesses_with_features(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def set_website_analysis(session: AsyncSession, business_id: str, analysis: dict) -> None:
+    await session.execute(
+        update(BusinessRow)
+        .where(BusinessRow.id == business_id)
+        .values(website_analysis=analysis, updated_at=utcnow())
+    )
+
+
+async def clear_duplicate_flags(session: AsyncSession) -> int:
+    """Reset duplicate flags before a dedup pass. Returns rows touched."""
+    result = await session.execute(
+        update(BusinessRow)
+        .where(BusinessRow.is_duplicate.is_(True))
+        .values(is_duplicate=False, duplicate_of=None, deduped_at=None, updated_at=utcnow())
+    )
+    return result.rowcount or 0
+
+
+async def mark_duplicates(session: AsyncSession, duplicates: dict[str, str]) -> int:
+    """Flag duplicate business ids with their canonical id. Returns rows touched."""
+    marked = 0
+    for business_id, canonical_id in duplicates.items():
+        result = await session.execute(
+            update(BusinessRow)
+            .where(BusinessRow.id == business_id)
+            .values(
+                is_duplicate=True,
+                duplicate_of=canonical_id,
+                deduped_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+        marked += result.rowcount or 0
+    return marked
 
 
 async def count_collected(session: AsyncSession) -> int:

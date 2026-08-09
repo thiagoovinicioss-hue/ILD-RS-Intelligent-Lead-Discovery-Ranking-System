@@ -109,6 +109,11 @@ def make_vector(
         "contact_availability": 0.667,
         "category_fit": 1.0,
         "location_fit": 0.5,
+        "website_quality": 0.5,
+        "business_completeness": 0.75,
+        "recent_activity": 0.5,
+        "social_presence": 0.5,
+        "social_activity": 0.5,
     }
     w = weights or configured
     features = {

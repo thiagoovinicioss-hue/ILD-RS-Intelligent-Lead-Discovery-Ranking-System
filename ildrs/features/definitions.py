@@ -71,6 +71,36 @@ FEATURE_DEFINITIONS: dict[str, FeatureDefinition] = {
             "Proximity to configured discovery center, exponential decay.",
             provenance_field="location",
         ),
+        FeatureDefinition(
+            "website_quality",
+            "Website quality",
+            "Fetched site has a real domain, title, and meaningful content.",
+            provenance_field="website_analysis",
+        ),
+        FeatureDefinition(
+            "business_completeness",
+            "Business completeness",
+            "Share of core business fields that carry real values.",
+            provenance_field="business",
+        ),
+        FeatureDefinition(
+            "recent_activity",
+            "Recent activity",
+            "Business had an open/close event within the last 7 days.",
+            provenance_field="recent_activity",
+        ),
+        FeatureDefinition(
+            "social_presence",
+            "Social presence",
+            "Any social profile found on the business website.",
+            provenance_field="social_links",
+        ),
+        FeatureDefinition(
+            "social_activity",
+            "Social activity",
+            "Recency of the latest post across detected profiles.",
+            provenance_field="social_links",
+        ),
     )
 }
 

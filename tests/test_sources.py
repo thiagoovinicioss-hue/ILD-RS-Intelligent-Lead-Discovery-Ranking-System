@@ -136,7 +136,7 @@ class TestGooglePlaces:
         business = await src.collect_details(candidates[0])
         assert business.source == "google_places"
         assert business.name == "Austin Repair Co"
-        assert business.phone == "+1 512-555-0142"
+        assert business.phone == "+15125550142"
         assert business.website == "https://austinrepair.example.com"
         assert business.google_rating == 4.6
         assert business.review_count == 212
@@ -154,3 +154,81 @@ class TestGooglePlaces:
 
         with pytest.raises(SourceError):
             await src.discover(DiscoveryQuery(query="plumber", limit=5))
+
+    async def test_retries_then_succeeds(self):
+        import ildrs.config as config_module
+        from ildrs.config import Settings
+
+        class FlakyTransport(httpx.AsyncBaseTransport):
+            attempts = 0
+
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                self.attempts += 1
+                if self.attempts == 1:
+                    return httpx.Response(500, text="boom", request=request)
+                return httpx.Response(200, json=SEARCH_RESPONSE, request=request)
+
+        transport = FlakyTransport()
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            config_module,
+            "_settings",
+            Settings(google_places_retries=3, google_places_backoff_base_ms=1),
+        )
+        try:
+            src = GooglePlacesSource(api_key="k", transport=transport)
+            candidates = await src.discover(DiscoveryQuery(query="plumber", limit=5))
+        finally:
+            monkeypatch.undo()
+        assert len(candidates) == 1
+        assert transport.attempts == 2
+
+    async def test_paginates_to_reach_limit(self):
+        class TwoPageTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                payload = json.loads(request.content) if request.content else {}
+                page = {"places": [SEARCH_RESPONSE["places"][0]]}
+                if not payload.get("pageToken"):
+                    page["nextPageToken"] = "tok-2"
+                return httpx.Response(200, json=page, request=request)
+
+        src = GooglePlacesSource(api_key="k", transport=TwoPageTransport())
+        candidates = await src.discover(DiscoveryQuery(query="plumber", limit=2))
+        assert len(candidates) == 2
+
+    async def test_caches_repeated_request(self):
+        class CountingTransport(httpx.AsyncBaseTransport):
+            hits = 0
+
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                self.hits += 1
+                return httpx.Response(200, json=SEARCH_RESPONSE, request=request)
+
+        transport = CountingTransport()
+        src = GooglePlacesSource(api_key="k", transport=transport)
+        await src.discover(DiscoveryQuery(query="plumber", limit=5))
+        await src.discover(DiscoveryQuery(query="plumber", limit=5))
+        assert transport.hits == 1
+
+    async def test_recent_activity_parsed_from_opening_hours(self):
+        from ildrs.sources.google_places import recent_activity_from_hours
+
+        place = {
+            "currentOpeningHours": {
+                "utcOffsetMinutes": -300,
+                "periods": [
+                    {
+                        "open": {"day": 1, "time": "08:00"},
+                        "close": {"day": 1, "time": "17:00"},
+                    }
+                ],
+            }
+        }
+        from datetime import UTC, datetime
+
+        now = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+        activity = recent_activity_from_hours(place, now=now)
+        assert activity is not None
+        # Mon 08:00 open / 17:00 close local = 13:00 / 22:00 UTC; latest event wins
+        assert activity.day == 3
+        assert activity.hour == 22

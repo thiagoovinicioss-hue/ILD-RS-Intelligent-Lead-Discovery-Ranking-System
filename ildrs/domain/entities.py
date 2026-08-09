@@ -67,10 +67,27 @@ class Business:
     google_rating: float | None = None
     review_count: int = 0
     business_status: str = ""
+    # enrichment data — stored raw, separate from derived features
+    website_analysis: dict | None = None
+    social_links: list[str] = field(default_factory=list)
+    recent_activity: datetime | None = None
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
     last_verified_at: datetime | None = None
     provenance: ProvenanceMap = field(default_factory=ProvenanceMap)
+
+    def completeness_fields(self) -> dict[str, bool]:
+        """Which core fields carry real values (for the completeness feature)."""
+        return {
+            "name": bool(self.name),
+            "address": bool(self.address),
+            "category": bool(self.category),
+            "website": bool(self.website),
+            "phone": bool(self.phone),
+            "email": bool(self.email),
+            "rating": self.google_rating is not None,
+            "status": bool(self.business_status),
+        }
 
 
 @dataclass
