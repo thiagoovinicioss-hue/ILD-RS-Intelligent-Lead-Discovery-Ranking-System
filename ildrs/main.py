@@ -16,15 +16,26 @@ from typing import Any
 import typer
 import uvicorn
 
+from ildrs import __version__
 from ildrs.config import get_settings
 from ildrs.domain.entities import OUTREACH_CHANNELS, OUTREACH_STATUSES
 from ildrs.notifications.notifier import Notifier
 from ildrs.outreach.workflow import OutreachWorkflow
 from ildrs.pipeline.orchestrator import Orchestrator
+from ildrs.rating.registry import create_model
+from ildrs.runtime import boot, shutdown_report
 from ildrs.sources.registry import create_source
 from ildrs.storage.bootstrap import init as init_schema
 from ildrs.storage.bootstrap import reset as reset_schema
 from ildrs.storage.database import Database
+from ildrs.terminal import (
+    Painter,
+    banner,
+    panel,
+    readiness_row,
+    shutdown_summary,
+    status_token,
+)
 
 app = typer.Typer(
     help="ILD-RS — Intelligent Lead Discovery & Ranking System.", no_args_is_help=True
@@ -34,75 +45,146 @@ outreach_cmd = typer.Typer(help="Drive outreach workflow.", no_args_is_help=True
 jobs_cmd = typer.Typer(help="Inspect pipeline jobs.", no_args_is_help=True)
 config_cmd = typer.Typer(help="Configuration commands.", no_args_is_help=True)
 db_cmd = typer.Typer(help="Database management.", no_args_is_help=True)
+review_cmd = typer.Typer(help="Review outreach drafts before sending.", no_args_is_help=True)
 app.add_typer(leads_cmd, name="leads")
 app.add_typer(outreach_cmd, name="outreach")
 app.add_typer(jobs_cmd, name="jobs")
 app.add_typer(config_cmd, name="config")
 app.add_typer(db_cmd, name="db")
+app.add_typer(review_cmd, name="review")
 
 
 # --------------------------------------------------------------------------
 # run / serve (signal-aware)
 # --------------------------------------------------------------------------
 
+_PIPELINE_STAGES = ("discover", "collect", "analyze", "rate", "rank")
+
 
 @app.command()
-def run() -> None:
-    """Run the full pipeline once (discover→rank); Ctrl+C safe."""
+def run(
+    pipeline: bool = typer.Option(
+        False, "--pipeline", help="Run discover→collect→analyze→rate→rank before serving"
+    ),
+    host: str = typer.Option(None, help="Bind host (default: ILD_API_HOST)"),
+    port: int = typer.Option(None, help="Bind port (default: ILD_API_PORT)"),
+    no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI colors"),
+) -> None:
+    """Boot, verify, optionally run the pipeline once, then serve API + scheduler.
 
-    async def main() -> tuple[list[dict], bool]:
-        cancel = asyncio.Event()
-        interrupted = _install_interrupt_handlers(cancel)
-        settings = get_settings()
-        db = Database()
-        db.connect()
-        await init_schema(db)
-        notifier = Notifier(db)
-        orchestrator = Orchestrator(db, create_source(settings.source), notifier)
-        try:
-            results = await orchestrator.run_full_pipeline(cancel=cancel)
-        finally:
-            await db.close()
-        return results, interrupted()
-
-    results, interrupted = asyncio.run(main())
-    _print_stage_results(results)
-    if interrupted:
-        _shutdown_message("Pipeline interrupted; state persisted.")
-        sys.exit(130)
+    Ctrl+C triggers a graceful shutdown (jobs stopped, state persisted,
+    database closed) and exits with status 130.
+    """
+    code = asyncio.run(
+        _run_server(
+            run_pipeline=pipeline,
+            host=host,
+            port=port,
+            no_color=no_color,
+        )
+    )
+    if code:
+        sys.exit(code)
 
 
 @app.command()
 def serve(
     host: str = typer.Option(None, help="Bind host (default: ILD_API_HOST)"),
     port: int = typer.Option(None, help="Bind port (default: ILD_API_PORT)"),
+    no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI colors"),
 ) -> None:
-    """Run API + scheduler loop (long-running); Ctrl+C safe."""
+    """Boot, verify, then run API + scheduler loop (long-running); Ctrl+C safe."""
+    code = asyncio.run(_run_server(run_pipeline=False, host=host, port=port, no_color=no_color))
+    if code:
+        sys.exit(code)
+
+
+async def _run_server(
+    *,
+    run_pipeline: bool,
+    host: str | None,
+    port: int | None,
+    no_color: bool,
+) -> int:
+    """Shared body of `run` and `serve`. Returns the process exit code."""
+    painter = Painter(enabled=not no_color)
     settings = get_settings()
+
+    context, readiness = await boot()
+    if context is None:
+        _print_banner(painter, readiness)
+        typer.echo("")
+        typer.echo(painter.error("startup aborted — resolve the failures above and retry."))
+        return 1
+
+    if run_pipeline:
+        cancel = asyncio.Event()
+        for stage in _PIPELINE_STAGES:
+            if cancel.is_set():
+                break
+            result = await context.orchestrator.run_stage_guarded(stage, cancel=cancel)
+            _print_stage_results([result])
+            if result.get("status") != "completed":
+                typer.echo(painter.warn("pipeline did not complete; serving anyway."))
+
+    _print_banner(painter, readiness)
+
     bind_host = host or settings.api_host
     bind_port = port or settings.api_port
 
-    async def main() -> bool:
-        from ildrs.api.app import create_app
+    from ildrs.api.app import create_app
 
-        config = uvicorn.Config(
-            create_app(), host=bind_host, port=bind_port, log_level=settings.log_level.lower()
-        )
-        server = GracefulServer(config)
-        loop = asyncio.get_running_loop()
+    config = uvicorn.Config(
+        create_app(context=context),
+        host=bind_host,
+        port=bind_port,
+        log_level=settings.log_level.lower(),
+    )
+    server = GracefulServer(config)
+    holder: dict[str, Any] = {"server": server}
+    cancel = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
-        def _on_signal() -> None:
-            server.interrupt()
+    def _on_signal() -> None:
+        cancel.set()
+        if holder["server"] is not None:
+            holder["server"].interrupt()
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _on_signal)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _on_signal)
+
+    interrupted = False
+    try:
         await server.serve()
-        return server.was_interrupted
+        interrupted = server.was_interrupted
+    except Exception as exc:  # noqa: BLE001 - report instead of a traceback
+        typer.echo(painter.error(f"server failed: {exc}"))
+        return 1
+    finally:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError):
+                loop.remove_signal_handler(sig)
 
-    interrupted = asyncio.run(main())
-    if interrupted:
-        _shutdown_message("API server stopped; scheduler and DB shut down cleanly.")
-        sys.exit(130)
+    _print_shutdown(painter, context, interrupted=interrupted, host=bind_host, port=bind_port)
+    return 130 if interrupted else 0
+
+
+def _print_banner(painter: Painter, readiness) -> None:
+    rows = [(key, status_token(state), detail) for key, state, detail in readiness.banner_rows()]
+    typer.echo(banner(painter, rows))
+
+
+def _print_shutdown(painter: Painter, context, *, interrupted: bool, host: str, port: int) -> None:
+    items, exit_note = shutdown_report(context, interrupted=interrupted, host=host, port=port)
+    typer.echo("")
+    typer.echo(
+        shutdown_summary(
+            painter,
+            header="ILD-RS · SHUTDOWN COMPLETE",
+            items=items,
+            exit_note=exit_note,
+        )
+    )
 
 
 class GracefulServer(uvicorn.Server):
@@ -658,22 +740,295 @@ def health() -> None:
 
 
 # --------------------------------------------------------------------------
-# helpers
+# status
 # --------------------------------------------------------------------------
 
 
-def _install_interrupt_handlers(cancel: asyncio.Event | None):
-    """Install SIGINT/SIGTERM handlers. Returns a callable reporting interruption."""
-    interrupted = {"flag": False}
+@app.command()
+def status(
+    no_color: bool = typer.Option(False, "--no-color", help="Disable ANSI colors"),
+) -> None:
+    """Live system snapshot: database, counts, model, review queue."""
+    painter = Painter(enabled=not no_color)
+    settings = get_settings()
 
-    def _on_signal(_signum: int, _frame: Any) -> None:
-        interrupted["flag"] = True
-        if cancel is not None:
-            cancel.set()
+    async def collect() -> dict:
+        from ildrs.outreach.review import ReviewWorkflow
+        from ildrs.storage import repositories as repo
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, _on_signal)
-    return lambda: interrupted["flag"]
+        db = Database()
+        db.connect()
+        try:
+            await init_schema(db)
+            async with db.session() as session:
+                data = {
+                    "businesses": await repo.count_businesses(session),
+                    "collected": await repo.count_collected(session),
+                    "analyzed": await repo.count_analyzed(session),
+                    "valid": await repo.count_valid_feature_vectors(session),
+                    "leads": await repo.count_leads(session),
+                    "high_quality": await repo.count_high_quality_leads(session),
+                    "monitors": len(await repo.list_monitors(session)),
+                    "last_verify": await repo.last_verification_time(session),
+                    "review_pending": await ReviewWorkflow(db).count_pending(),
+                }
+                return data
+        finally:
+            await db.close()
+
+    data = asyncio.run(collect())
+
+    try:
+        model = create_model(settings.rating_model)
+        model_label = f"{model.name}@{model.version}"
+    except Exception as exc:  # noqa: BLE001
+        model_label = f"{settings.rating_model} (error: {exc})"
+
+    rows = [
+        ("SOURCE", status_token("ok"), settings.source),
+        (
+            "DATABASE",
+            status_token("connected"),
+            f"{data['businesses']} businesses",
+        ),
+        (
+            "BUSINESSES",
+            status_token("ok", label="COLLECTED"),
+            f"{data['collected']}/{data['businesses']}",
+        ),
+        (
+            "ANALYSIS",
+            status_token("ok"),
+            f"{data['analyzed']} analyzed · {data['valid']} valid vectors",
+        ),
+        (
+            "LEADS",
+            status_token("ok"),
+            f"{data['leads']} rated · {data['high_quality']} high-value (≥70)",
+        ),
+        ("RATING MODEL", status_token("ok"), model_label),
+        (
+            "REVIEW QUEUE",
+            status_token("ok"),
+            f"{data['review_pending']} pending draft(s)",
+        ),
+        (
+            "MONITORING",
+            status_token("ok"),
+            f"{data['monitors']} tracked send(s)",
+        ),
+        (
+            "LAST VERIFY",
+            status_token("ok", label="OK" if data["last_verify"] else "NEVER"),
+            data["last_verify"] or "no verification yet",
+        ),
+    ]
+    typer.echo(
+        panel(
+            painter,
+            f"ILD-RS · STATUS v{__version__}",
+            [readiness_row(painter, k, t, d) for k, t, d in rows],
+        )
+    )
+
+
+# --------------------------------------------------------------------------
+# review queue
+# --------------------------------------------------------------------------
+
+
+@review_cmd.command("list")
+def review_list(
+    limit: int = typer.Option(20, help="Max drafts to show"),
+    all: bool = typer.Option(False, "--all", help="Include approved, sent, and rejected drafts"),
+) -> None:
+    """List outreach drafts in the review queue (pending by default)."""
+    from ildrs.outreach.review import ReviewWorkflow
+
+    async def main() -> list[dict]:
+        db = Database()
+        db.connect()
+        try:
+            await init_schema(db)
+            workflow = ReviewWorkflow(db)
+            if all:
+                return await workflow.list_all(limit=limit)
+            return await workflow.list_pending(limit=limit)
+        finally:
+            await db.close()
+
+    items = asyncio.run(main())
+    if not items:
+        typer.echo("(review queue is empty)")
+        return
+    rows = [
+        [
+            item["id"][:8],
+            item["business_name"] or item["lead_id"],
+            f"{item['rating']:.0f}" if item["rating"] is not None else "-",
+            item["channel"],
+            item["review_status"],
+            item["sent_status"],
+            (item["created_at"] or "")[:19],
+        ]
+        for item in items
+    ]
+    _print_rows(
+        ["ID", "BUSINESS", "RATING", "CHANNEL", "REVIEW", "SENT", "CREATED"],
+        rows,
+    )
+
+
+@review_cmd.command("show")
+def review_show(outreach_id: str) -> None:
+    """Show a full draft: business context, message, and review history."""
+    from ildrs.outreach.review import ReviewWorkflow
+
+    async def main() -> dict | None:
+        db = Database()
+        db.connect()
+        try:
+            await init_schema(db)
+            items = await ReviewWorkflow(db).list_all(limit=100000)
+        finally:
+            await db.close()
+        return _resolve_review_id(items, outreach_id)
+
+    item = asyncio.run(main())
+    if item is None:
+        typer.echo(f"outreach '{outreach_id}' not found", err=True)
+        sys.exit(1)
+    typer.echo(f"ID:        {item['id']}")
+    typer.echo(f"LEAD:      {item['lead_id']}")
+    typer.echo(f"BUSINESS:  {item['business_name']}")
+    if item.get("business_website"):
+        typer.echo(f"WEBSITE:   {item['business_website']}")
+    if item.get("business_phone"):
+        typer.echo(f"PHONE:     {item['business_phone']}")
+    rating_line = (
+        f"RATING:    {item['rating']:.1f} (confidence {item['confidence']:.2f})"
+        if item["rating"] is not None
+        else "RATING:    -"
+    )
+    typer.echo(rating_line)
+    typer.echo(f"CHANNEL:   {item['channel']}")
+    typer.echo(f"REVIEW:    {item['review_status']} · sent: {item['sent_status']}")
+    typer.echo(f"CREATED:   {item['created_at']}")
+    if item.get("note"):
+        typer.echo(f"NOTE:      {item['note']}")
+    typer.echo("")
+    typer.echo("REASON:")
+    typer.echo(item.get("reason") or "(none)")
+    typer.echo("")
+    typer.echo("MESSAGE:")
+    typer.echo(item.get("message") or "(empty)")
+
+
+@review_cmd.command("approve")
+def review_approve(
+    outreach_id: str,
+    note: str = typer.Option("", help="Optional approval note"),
+) -> None:
+    """Approve a draft so it can be sent."""
+    _review_decision("approve", outreach_id, note=note)
+
+
+@review_cmd.command("reject")
+def review_reject(
+    outreach_id: str,
+    note: str = typer.Option("", help="Why it was rejected (optional)"),
+) -> None:
+    """Reject a draft; it will never be sent."""
+    _review_decision("reject", outreach_id, note=note)
+
+
+@review_cmd.command("send")
+def review_send(outreach_id: str) -> None:
+    """Record that an approved draft was actually delivered."""
+    _review_decision("send", outreach_id)
+
+
+@review_cmd.command("prepare")
+def review_prepare(
+    lead_id: str,
+    channel: str = typer.Option("", help="Channel (default: email)"),
+) -> None:
+    """Generate a verified-facts draft for a lead and queue it for review."""
+    from ildrs.outreach.review import ReviewWorkflow
+
+    async def main() -> dict:
+        db = Database()
+        db.connect()
+        try:
+            await init_schema(db)
+            result = await ReviewWorkflow(db).prepare(lead_id=lead_id, channel=channel)
+            if not result.ok:
+                return {"ok": False, "error": result.error}
+            data = result.data or {}
+            return {"ok": True, "id": data.get("id", ""), "duplicate": bool(data.get("duplicate"))}
+        finally:
+            await db.close()
+
+    outcome = asyncio.run(main())
+    if not outcome["ok"]:
+        typer.echo(f"prepare failed: {outcome['error']}", err=True)
+        sys.exit(1)
+    label = " (already pending)" if outcome["duplicate"] else ""
+    typer.echo(f"prepared draft {outcome['id'][:8]}{label} — run `ildrs review list` to review it.")
+
+
+def _resolve_review_id(items: list[dict], outreach_id: str) -> dict | None:
+    """Resolve a (possibly abbreviated) review id to its full item."""
+    matches = [item for item in items if item["id"].startswith(outreach_id)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        typer.echo(f"'{outreach_id}' is ambiguous; use the full id", err=True)
+        sys.exit(1)
+    return None
+
+
+def _review_decision(action: str, outreach_id: str, *, note: str = "") -> None:
+    from ildrs.outreach.review import ReviewWorkflow
+
+    async def main() -> dict:
+        db = Database()
+        db.connect()
+        try:
+            await init_schema(db)
+            workflow = ReviewWorkflow(db)
+            items = await workflow.list_all(limit=100000)
+            item = _resolve_review_id(items, outreach_id)
+            if item is None:
+                return {"ok": False, "error": f"outreach '{outreach_id}' not found"}
+            full_id = item["id"]
+            if action == "approve":
+                result = await workflow.approve(outreach_id=full_id)
+            elif action == "reject":
+                result = await workflow.reject(outreach_id=full_id, note=note)
+            else:
+                result = await workflow.mark_sent(outreach_id=full_id)
+            return {"ok": result.ok, "error": result.error, "data": result.data or {}}
+        finally:
+            await db.close()
+
+    outcome = asyncio.run(main())
+    if not outcome["ok"]:
+        typer.echo(f"{action} failed: {outcome['error']}", err=True)
+        sys.exit(1)
+    data = outcome["data"]
+    label = {"approve": "approved", "reject": "rejected", "send": "sent"}[action]
+    parts = [
+        f"review={data['review_status']}" if data.get("review_status") else "",
+        f"sent={data['sent_status']}" if data.get("sent_status") else "",
+    ]
+    detail = " ".join(p for p in parts if p)
+    typer.echo(f"{label} {outreach_id[:8]}" + (f"  {detail}" if detail else ""))
+
+
+# --------------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------------
 
 
 def _print_stage_results(results: list[dict]) -> None:
@@ -702,12 +1057,6 @@ def _json(value: Any, *, indent: int = 2) -> str:
     import json
 
     return json.dumps(value, indent=indent, default=str)
-
-
-def _shutdown_message(detail: str) -> None:
-    typer.echo("")
-    typer.echo("ILD-RS shutdown complete.")
-    typer.echo(detail)
 
 
 if __name__ == "__main__":

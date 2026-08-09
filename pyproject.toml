@@ -38,6 +38,9 @@ include = ["ildrs*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "subprocess: end-to-end test that spawns a real subprocess (slower)",
+]
 
 [tool.ruff]
 line-length = 100

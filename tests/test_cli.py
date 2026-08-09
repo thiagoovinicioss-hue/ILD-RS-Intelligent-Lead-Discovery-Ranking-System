@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 import ildrs.config as config_module
 import ildrs.main as cli
@@ -51,9 +51,7 @@ def test_single_stage_discover(cli_settings):
 
 
 def test_full_pipeline_then_leads_list(cli_settings):
-    result = runner.invoke(cli.app, ["run"])
-    assert result.exit_code == 0
-    assert "[completed] rank" in result.stdout
+    assert _run_pipeline(runner).exit_code == 0
 
     leads = runner.invoke(cli.app, ["leads", "list"])
     assert leads.exit_code == 0
@@ -63,6 +61,20 @@ def test_full_pipeline_then_leads_list(cli_settings):
     assert len(body) == 3
 
 
+def _run_pipeline(runner) -> Result:
+    """Run discover→collect→analyze→rate→rank as one-shot stage commands.
+
+    `ildrs run` now boots and serves (long-running), so tests that only want
+    the pipeline once use the individual stages instead.
+    """
+    result: Result | None = None
+    for stage in ("discover", "collect", "analyze", "rate", "rank"):
+        result = runner.invoke(cli.app, [stage])
+        assert result.exit_code == 0, f"{stage} failed: {result.output}"
+    assert result is not None
+    return result
+
+
 def test_leads_show_missing_exits_1(cli_settings):
     result = runner.invoke(cli.app, ["leads", "show", "nope"])
     assert result.exit_code == 1
@@ -70,7 +82,7 @@ def test_leads_show_missing_exits_1(cli_settings):
 
 
 def test_outreach_set_closed_loop(cli_settings):
-    assert runner.invoke(cli.app, ["run"]).exit_code == 0
+    assert _run_pipeline(runner).exit_code == 0
     leads = runner.invoke(cli.app, ["leads", "list"])
     first_lead = [line for line in leads.stdout.splitlines() if line and not line.startswith("-")][
         1
@@ -95,7 +107,7 @@ def test_outreach_invalid_status_exits_2(cli_settings):
 
 
 def test_jobs_list_after_pipeline(cli_settings):
-    assert runner.invoke(cli.app, ["run"]).exit_code == 0
+    assert _run_pipeline(runner).exit_code == 0
     result = runner.invoke(cli.app, ["jobs", "list"])
     assert result.exit_code == 0
     assert "STAGE" in result.stdout
