@@ -226,7 +226,7 @@ def test_run_pipeline_graceful_interrupt(tmp_path):
     env = dict(os.environ)
     env.update(
         {
-            "ILD_DB_PATH": str(tmp_path / "run.db"),
+            "ILD_DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'run.db'}",
             "ILD_API_PORT": "8977",
             "ILD_DISCOVERY_LIMIT": "2",
             "NO_COLOR": "1",

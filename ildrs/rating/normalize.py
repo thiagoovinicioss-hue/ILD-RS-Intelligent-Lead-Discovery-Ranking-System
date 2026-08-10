@@ -32,7 +32,7 @@ from ildrs.rating.spec import (
     STATUS_MAPPING,
 )
 
-STATUS_DEFAULT = 0.0
+STATUS_DEFAULT = 0.2
 
 
 def clamp01(value: float) -> float:

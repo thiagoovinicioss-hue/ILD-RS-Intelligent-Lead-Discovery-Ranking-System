@@ -56,6 +56,13 @@ class TestPointBiserial:
     def test_constant_y_returns_zero(self):
         assert point_biserial([0.1, 0.2, 0.3, 0.4], [1, 1, 1, 1]) == 0.0
 
+    def test_no_float_truncation_in_sample_counts(self):
+        # n=22 with 15 ones: float (15/22)*22 truncates to 14 via int(), which
+        # used to inflate mean_1 (15/14) and skew r above the true 1.0.
+        x = [1.0] * 15 + [0.0] * 7
+        y = [1] * 15 + [0] * 7
+        assert point_biserial(x, y) == pytest.approx(1.0)
+
 
 class TestCalibratedWeightsModel:
     def _samples(self, n: int = 10) -> list[OutcomeSample]:

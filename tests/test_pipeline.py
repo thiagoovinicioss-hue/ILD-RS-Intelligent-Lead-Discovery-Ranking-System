@@ -284,3 +284,59 @@ async def test_guarded_stage_returns_failure_dict(db):
     result = await orchestrator.run_stage_guarded("discover")
     assert result["status"] == "failed"
     assert "boom" in result["error"]
+
+
+async def test_state_persists_across_restart(tmp_path):
+    """Records written by one Database instance survive a fresh connection.
+
+    Mirrors a real application restart: the same SQLite file is reopened with
+    a brand-new Database, and businesses, leads, outcomes, notifications, and
+    job history must all still be there.
+    """
+    from ildrs.outreach.workflow import OutreachWorkflow
+    from ildrs.storage.bootstrap import init as init_schema
+    from ildrs.storage.database import Database
+    from ildrs.storage.repositories import (
+        count_outcomes,
+        list_businesses,
+        list_jobs,
+        list_leads,
+        list_notifications,
+    )
+
+    url = f"sqlite+aiosqlite:///{tmp_path}/restart.db"
+
+    # --- first process: full pipeline + an outcome -----------------------
+    db1 = Database(url=url)
+    db1.connect()
+    await init_schema(db1)
+    orchestrator = Orchestrator(db1, FixtureSource(), Notifier(db1))
+    await orchestrator.run_full_pipeline(cancel=asyncio.Event())
+
+    async with db1.session() as session:
+        leads = await list_leads(session, limit=100)
+    assert len(leads) == 3
+
+    workflow = OutreachWorkflow(db1)
+    opened = await workflow.open(lead_id=leads[0].id, channel="email", note="restart-test")
+    await workflow.transition(outreach_id=opened.data["id"], status="responded")
+    assert await workflow.outcome_count() == 1
+    await db1.close()
+
+    # --- second process: brand-new connection to the same file -----------
+    db2 = Database(url=url)
+    db2.connect()
+    await init_schema(db2)
+    async with db2.session() as session:
+        businesses = await list_businesses(session, limit=100)
+        leads = await list_leads(session, limit=100)
+        outcomes = await count_outcomes(session)
+        notifications = await list_notifications(session, limit=100)
+        jobs = await list_jobs(session, limit=100)
+    await db2.close()
+
+    assert len(businesses) == 3
+    assert len(leads) == 3
+    assert outcomes == 1
+    assert len(notifications) >= 1
+    assert any(j.status == "completed" for j in jobs)

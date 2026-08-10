@@ -123,6 +123,10 @@ def test_extract_website_quality_requires_fetched_content():
     extractor = FeatureExtractor()
     plain = make_business(has_website=True)
     assert extractor.extract(plain).features["website_quality"].value == 0.0  # not analyzed
+    assert (
+        extractor.extract(plain).features["website_quality"].provenance_kind
+        == DataSourceKind.UNAVAILABLE
+    )
 
     good = make_business(has_website=True)
     good.website_analysis = {
@@ -134,10 +138,18 @@ def test_extract_website_quality_requires_fetched_content():
         "has_ssl": True,
     }
     assert extractor.extract(good).features["website_quality"].value == pytest.approx(1.0)
+    assert (
+        extractor.extract(good).features["website_quality"].provenance_kind
+        == DataSourceKind.DERIVED
+    )
 
     broken = make_business(has_website=True)
     broken.website_analysis = {"fetched": False, "error": "timeout", "title": "", "word_count": 0}
-    assert extractor.extract(broken).features["website_quality"].value == pytest.approx(0.1)
+    assert extractor.extract(broken).features["website_quality"].value == pytest.approx(0.0)
+    assert (
+        extractor.extract(broken).features["website_quality"].provenance_kind
+        == DataSourceKind.UNAVAILABLE
+    )
 
 
 def test_extract_business_completeness():
@@ -182,15 +194,18 @@ def test_extract_social_presence_and_activity():
 
     active = make_business()
     active.social_links = ["https://www.facebook.com/apexplumbing"]
-    assert extractor.extract(active).features["social_presence"].value == 1.0
-    assert extractor.extract(active).features["social_activity"].value > 0.0
+    active_fv = extractor.extract(active)
+    assert active_fv.features["social_presence"].value == 1.0
+    assert active_fv.features["social_presence"].provenance_kind == DataSourceKind.DERIVED
+    assert active_fv.features["social_activity"].value == 0.0  # recency unknown
+    assert active_fv.features["social_activity"].provenance_kind == DataSourceKind.UNAVAILABLE
 
     dormant = make_business()
     dormant.social_links = ["https://www.facebook.com/apexplumbing"]
     dormant.website_analysis = {"latest_post_at": "2019-01-01"}
-    assert extractor.extract(dormant).features["social_activity"].value == pytest.approx(
-        0.0, abs=0.05
-    )
+    dormant_fv = extractor.extract(dormant)
+    assert dormant_fv.features["social_activity"].value == pytest.approx(0.0, abs=0.05)
+    assert dormant_fv.features["social_activity"].provenance_kind == DataSourceKind.DERIVED
 
 
 def test_validator_reports_availability_and_validity():

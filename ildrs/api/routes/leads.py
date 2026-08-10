@@ -54,9 +54,7 @@ async def lead_detail(lead_id: str, request: Request):
         item = lead_serialize(row)
         item["business"] = business_serialize(row.business) if row.business else None
         item["outreach"] = [outreach_serialize(o) for o in await outreach_for_lead(session, row.id)]
-        item["outcomes"] = [
-            outcome_serialize(o) for o in await outcomes_for_lead(session, row.id)
-        ]
+        item["outcomes"] = [outcome_serialize(o) for o in await outcomes_for_lead(session, row.id)]
         return item
 
 

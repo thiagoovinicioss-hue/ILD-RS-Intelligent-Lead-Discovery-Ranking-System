@@ -36,12 +36,13 @@ def point_biserial(x: list[float], y: list[int]) -> float:
     n = len(x)
     if n < _MIN_N:
         return 0.0
-    p1 = sum(y) / n  # fraction with outcome == 1
-    if p1 in (0.0, 1.0):
+    n1 = sum(y)
+    if n1 in (0, n):
         return 0.0
+    p1 = n1 / n
     mean_x = sum(x) / n
-    mean_1 = sum(xi for xi, yi in zip(x, y, strict=True) if yi == 1) / max(1, int(p1 * n))
-    mean_0 = sum(xi for xi, yi in zip(x, y, strict=True) if yi == 0) / max(1, n - int(p1 * n))
+    mean_1 = sum(xi for xi, yi in zip(x, y, strict=True) if yi == 1) / n1
+    mean_0 = sum(xi for xi, yi in zip(x, y, strict=True) if yi == 0) / (n - n1)
     var = sum((xi - mean_x) ** 2 for xi in x) / n
     s = math.sqrt(var)
     if s < 1e-12:

@@ -44,7 +44,9 @@ from ildrs.rating import (
     transform_quadratic,
 )
 from ildrs.rating.base import ModelNotImplemented
+from ildrs.rating.normalize import STATUS_DEFAULT
 from ildrs.rating.registry import create_model as _create
+from ildrs.rating.spec import STATUS_MAPPING
 from tests.conftest import make_vector
 
 NOW = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
@@ -111,9 +113,11 @@ class TestNormalization:
         assert normalize_count_log(10000) == pytest.approx(1.0)
 
     def test_categorical_mapping(self):
-        assert normalize_categorical("OPERATIONAL", {"OPERATIONAL": 1.0}, 0.0) == 1.0
-        assert normalize_categorical("CLOSED", {"OPERATIONAL": 1.0}, 0.0) == 0.0
-        assert normalize_categorical(None, {"OPERATIONAL": 1.0}, 0.0) == 0.0
+        assert normalize_categorical("OPERATIONAL", STATUS_MAPPING, STATUS_DEFAULT) == 1.0
+        assert normalize_categorical("CLOSED_PERMANENTLY", STATUS_MAPPING, STATUS_DEFAULT) == 0.2
+        assert normalize_categorical("CLOSED_TEMPORARILY", STATUS_MAPPING, STATUS_DEFAULT) == 0.2
+        assert normalize_categorical("CLOSED", STATUS_MAPPING, STATUS_DEFAULT) == 0.2
+        assert normalize_categorical(None, STATUS_MAPPING, STATUS_DEFAULT) == 0.2
 
     def test_passthrough_clamps(self):
         assert normalize_passthrough(0.5) == 0.5
@@ -267,12 +271,12 @@ class TestWeightedRatingModel:
         assert model.predict(two_weeks, now=NOW).rating == pytest.approx(50.0, abs=0.5)
         assert model.predict(old, now=NOW).rating < 1.0
 
-    def test_business_status_raw_operational(self):
+    def test_business_status_closed_collapses_quadratically(self):
         model = WeightedRatingModel(config=simple_config(["business_status"]))
         op = model.predict(build_vector(business_status=(0.0, "OPERATIONAL")), now=NOW)
         closed = model.predict(build_vector(business_status=(0.0, "CLOSED_PERMANENTLY")), now=NOW)
         assert op.rating == pytest.approx(100.0, abs=0.01)
-        assert closed.rating == 0.0
+        assert closed.rating == pytest.approx(4.0, abs=0.01)
 
     def test_rating_and_confidence_are_independent(self):
         model = WeightedRatingModel(config=simple_config(["web_presence", "rating_score"]))

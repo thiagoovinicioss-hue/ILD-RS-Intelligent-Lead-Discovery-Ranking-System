@@ -117,32 +117,13 @@ async def _run_server(
         typer.echo(painter.error("startup aborted — resolve the failures above and retry."))
         return 1
 
-    if run_pipeline:
-        cancel = asyncio.Event()
-        for stage in _PIPELINE_STAGES:
-            if cancel.is_set():
-                break
-            result = await context.orchestrator.run_stage_guarded(stage, cancel=cancel)
-            _print_stage_results([result])
-            if result.get("status") != "completed":
-                typer.echo(painter.warn("pipeline did not complete; serving anyway."))
-
-    _print_banner(painter, readiness)
-
-    bind_host = host or settings.api_host
-    bind_port = port or settings.api_port
-
-    from ildrs.api.app import create_app
-
-    config = uvicorn.Config(
-        create_app(context=context),
-        host=bind_host,
-        port=bind_port,
-        log_level=settings.log_level.lower(),
-    )
-    server = GracefulServer(config)
-    holder: dict[str, Any] = {"server": server}
+    # Own SIGINT/SIGTERM from the very start (before the pipeline and the API
+    # boot) so an early Ctrl+C is always a graceful interruption. asyncio.run
+    # installs its own SIGINT handler that cancels the main task and raises
+    # KeyboardInterrupt; leaving it active during the pipeline or the server
+    # startup would bypass the shutdown report below.
     cancel = asyncio.Event()
+    holder: dict[str, Any] = {"server": None}
     loop = asyncio.get_running_loop()
 
     def _on_signal() -> None:
@@ -150,18 +131,51 @@ async def _run_server(
         if holder["server"] is not None:
             holder["server"].interrupt()
 
+    installed: list[signal.Signals] = []
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _on_signal)
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, _on_signal)
+            installed.append(sig)
 
-    interrupted = False
     try:
-        await server.serve()
-        interrupted = server.was_interrupted
-    except Exception as exc:  # noqa: BLE001 - report instead of a traceback
-        typer.echo(painter.error(f"server failed: {exc}"))
-        return 1
+        if run_pipeline:
+            for stage in _PIPELINE_STAGES:
+                if cancel.is_set():
+                    break
+                result = await context.orchestrator.run_stage_guarded(stage, cancel=cancel)
+                _print_stage_results([result])
+                if result.get("status") != "completed":
+                    typer.echo(painter.warn("pipeline did not complete; serving anyway."))
+
+        _print_banner(painter, readiness)
+
+        bind_host = host or settings.api_host
+        bind_port = port or settings.api_port
+
+        from ildrs.api.app import create_app
+
+        config = uvicorn.Config(
+            create_app(context=context),
+            host=bind_host,
+            port=bind_port,
+            log_level=settings.log_level.lower(),
+        )
+        server = GracefulServer(config)
+        holder["server"] = server
+        if cancel.is_set():
+            server.interrupt()
+
+        interrupted = False
+        try:
+            await server.serve()
+            interrupted = server.was_interrupted
+        except asyncio.CancelledError:
+            interrupted = True
+        except Exception as exc:  # noqa: BLE001 - report instead of a traceback
+            typer.echo(painter.error(f"server failed: {exc}"))
+            return 1
     finally:
-        for sig in (signal.SIGINT, signal.SIGTERM):
+        for sig in installed:
             with contextlib.suppress(NotImplementedError):
                 loop.remove_signal_handler(sig)
 

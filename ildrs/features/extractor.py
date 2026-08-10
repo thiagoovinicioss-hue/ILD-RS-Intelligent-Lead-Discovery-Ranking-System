@@ -102,7 +102,9 @@ class FeatureExtractor:
         activity_value, activity_kind = self._recent_activity(business)
 
         # social_presence / social_activity ---------------------------------
-        social_presence, social_activity, social_kind = self._social(business)
+        social_presence, social_activity, social_presence_kind, social_activity_kind = self._social(
+            business
+        )
 
         features: dict[str, FeatureValue] = {
             "web_presence": FeatureValue(
@@ -175,14 +177,14 @@ class FeatureExtractor:
                 "social_presence",
                 social_presence,
                 w["social_presence"],
-                social_kind.value,
+                social_presence_kind.value,
                 business.social_links,
             ),
             "social_activity": FeatureValue(
                 "social_activity",
                 social_activity,
                 w["social_activity"],
-                social_kind.value,
+                social_activity_kind.value,
                 business.social_links,
             ),
         }
@@ -216,11 +218,11 @@ class FeatureExtractor:
         if not has_domain(website):
             return 0.0, DataSourceKind.UNAVAILABLE
         if not analysis:
-            return 0.0, DataSourceKind.DERIVED  # not yet analyzed
+            return 0.0, DataSourceKind.UNAVAILABLE  # not yet analyzed
         fetched = bool(analysis.get("fetched"))
         error = analysis.get("error")
         if not fetched or error:
-            return 0.1, DataSourceKind.DERIVED
+            return 0.0, DataSourceKind.UNAVAILABLE
         signals = [
             bool(analysis.get("title")),
             bool(analysis.get("meta_description")),
@@ -256,13 +258,12 @@ class FeatureExtractor:
         value = clamp(1.0 - age_days / 30.0)  # fully fresh at 0 days, 0 at 30+
         return value, DataSourceKind.DIRECT
 
-    def _social(self, business: Business) -> tuple[float, float, DataSourceKind]:
+    def _social(self, business: Business) -> tuple[float, float, DataSourceKind, DataSourceKind]:
         links = [normalize_website(link) for link in (business.social_links or []) if link]
         links = [link for link in links if link]
         if not links:
-            return 0.0, 0.0, DataSourceKind.UNAVAILABLE
+            return 0.0, 0.0, DataSourceKind.UNAVAILABLE, DataSourceKind.UNAVAILABLE
         presence = 1.0
-        activity = 1.0  # presence alone implies some activity
         analysis = business.website_analysis or {}
         latest = analysis.get("latest_post_at") or analysis.get("social_latest_at") or ""
         if latest:
@@ -272,9 +273,11 @@ class FeatureExtractor:
                     latest_date = latest_date.replace(tzinfo=UTC)
                 age_days = (datetime.now(UTC) - latest_date).total_seconds() / 86400.0
                 activity = clamp(1.0 - age_days / 90.0)
+                return presence, activity, DataSourceKind.DERIVED, DataSourceKind.DERIVED
             except ValueError:
-                activity = 0.5
-        return presence, activity, DataSourceKind.DERIVED
+                pass
+        # links exist but recency is unknown — activity is not observed
+        return presence, 0.0, DataSourceKind.DERIVED, DataSourceKind.UNAVAILABLE
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

@@ -30,8 +30,13 @@ RATING_HI = 5.0
 # review counts span orders of magnitude; log compression saturates at this cap
 REVIEW_CAP = 1000
 
-# discrete business-status mapping (matches the pipeline's documented heuristic)
-STATUS_MAPPING = {"OPERATIONAL": 1.0}
+# discrete business-status mapping (matches the pipeline's documented heuristic:
+# OPERATIONAL → 1.0, any non-operational/closed status → 0.2, then z = u²)
+STATUS_MAPPING = {
+    "OPERATIONAL": 1.0,
+    "CLOSED_PERMANENTLY": 0.2,
+    "CLOSED_TEMPORARILY": 0.2,
+}
 
 
 @dataclass(frozen=True)
